@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Проверка подписки</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://telegram.org/js/telegram-web-app.js" defer></script>
+    <script src="script.js" defer></script>
+</head>
+<body>
+    <main class="container">
+        <div id="initial-state">
+            <div class="icon">
+                <img src="https://img.icons8.com/fluency/96/telegram-app.png" alt="Telegram Icon"/>
+            </div>
+            <h1>Проверка подписки</h1>
+            <p>Нажмите кнопку, чтобы проверить, подписаны ли вы на наш канал.</p>
+            <button id="check-button" class="button-primary">Проверить</button>
+        </div>
+
+        <div id="loading-state" class="hidden">
+            <div class="spinner"></div>
+            <p>Проверяем ваши данные...</p>
+        </div>
+
+        <div id="success-state" class="hidden">
+            <div class="icon success">✓</div>
+            <h1>Доступ предоставлен!</h1>
+            <p>Спасибо за подписку. Вот ваша ссылка:</p>
+            <a id="secret-link" href="#" class="button-primary" target="_blank">Получить контент</a>
+        </div>
+
+        <div id="error-not-subscribed-state" class="hidden">
+            <div class="icon error">✗</div>
+            <h1>Вы не подписаны</h1>
+            <p>Пожалуйста, подпишитесь на наш канал, чтобы получить доступ.</p>
+            <a id="channel-link" href="#" class="button-secondary" target="_blank">Подписаться на канал</a>
+            <button id="retry-button" class="button-primary">Я подписался, проверить снова</button>
+        </div>
+        
+         <div id="error-general-state" class="hidden">
+            <div class="icon error">!</div>
+            <h1>Произошла ошибка</h1>
+            <p id="error-message">Не удалось выполнить проверку. Попробуйте, пожалуйста, позже.</p>
+             <button id="retry-button-general" class="button-primary">Попробовать ещё</button>
+        </div>
+    </main>
+</body>
+</html>
