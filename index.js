@@ -1,4 +1,11 @@
 require('dotenv').config();
+console.log('=== DIAGNOSTICS ===');
+console.log('BOT_TOKEN defined:', !!process.env.BOT_TOKEN);
+console.log('BOT_TOKEN length:', process.env.BOT_TOKEN ? process.env.BOT_TOKEN.length : 0);
+console.log('CHANNEL_USERNAME defined:', !!process.env.CHANNEL_USERNAME);
+console.log('WEBAPP_URL defined:', !!process.env.WEBAPP_URL);
+console.log('SECRET_LINK defined:', !!process.env.SECRET_LINK);
+console.log('====================');
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
 const cors = require('cors');
@@ -74,4 +81,5 @@ app.post('/api/check-sub', async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`WebApp и бот запущены. WebApp: http://localhost:${PORT}`);
+
 });
