@@ -1,4 +1,3 @@
-// === Подключение зависимостей ===
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
@@ -8,7 +7,7 @@ const path = require('path');
 const GigaChat = require('gigachat');
 const { Agent } = require('node:https');
 
-// === Диагностика переменных окружения ===
+// --- Диагностика ---
 console.log('=== DIAGNOSTICS ===');
 console.log('BOT_TOKEN defined:', !!process.env.BOT_TOKEN);
 console.log('BOT_TOKEN length:', process.env.BOT_TOKEN ? process.env.BOT_TOKEN.length : 0);
@@ -18,12 +17,35 @@ console.log('SECRET_LINK defined:', !!process.env.SECRET_LINK);
 console.log('GIGACHAT_CREDENTIALS defined:', !!process.env.GIGACHAT_CREDENTIALS);
 console.log('====================');
 
-// === Инициализация Telegram бота ===
 const token = process.env.BOT_TOKEN;
 const webAppUrl = process.env.WEBAPP_URL;
-const bot = new TelegramBot(token, { polling: true });
 
-// Обработка команды /start
+// --- Создаём бота без polling (только для отправки сообщений) ---
+const bot = new TelegramBot(token);
+
+// --- Express сервер (будет принимать вебхуки) ---
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.use(cors());
+app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
+
+// === Установка вебхука при запуске ===
+const webhookUrl = `${webAppUrl}/webhook`; // путь для вебхука
+bot.setWebHook(webhookUrl).then(() => {
+  console.log(`Webhook установлен на ${webhookUrl}`);
+}).catch(err => {
+  console.error('Ошибка установки вебхука:', err);
+});
+
+// --- Обработчик вебхука (Telegram будет присылать сюда обновления) ---
+app.post('/webhook', (req, res) => {
+  bot.processUpdate(req.body);
+  res.sendStatus(200);
+});
+
+// --- Обработка команды /start ---
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   bot.sendMessage(chatId, '👋 Привет! Чтобы получить доступ, нажмите кнопку ниже для проверки подписки.', {
@@ -38,7 +60,7 @@ bot.onText(/\/start/, (msg) => {
   });
 });
 
-// === Функция отправки главного меню (после подписки) ===
+// --- Функция отправки главного меню ---
 async function sendMainMenu(chatId) {
   const menuMessage = `
 ✨ *Добро пожаловать в «Настройщик души»* ✨
@@ -72,16 +94,12 @@ async function sendMainMenu(chatId) {
   });
 }
 
-// === Функции для работы с GigaChat ===
+// --- GigaChat функции ---
 async function getGigaChatResponse(userMessage, level) {
-  // Временно отключаем проверку SSL (для упрощения, в продакшене лучше настроить сертификаты)
-  const httpsAgent = new Agent({
-    rejectUnauthorized: false
-  });
-
+  const httpsAgent = new Agent({ rejectUnauthorized: false });
   const client = new GigaChat({
     credentials: process.env.GIGACHAT_CREDENTIALS,
-    scope: 'GIGACHAT_API_PERS', // для физических лиц
+    scope: 'GIGACHAT_API_PERS',
     model: 'GigaChat',
     httpsAgent: httpsAgent,
     timeout: 60
@@ -98,7 +116,6 @@ async function getGigaChatResponse(userMessage, level) {
       temperature: 0.7,
       max_tokens: 500
     });
-
     return response.choices[0]?.message.content || 'Не удалось сгенерировать ответ.';
   } catch (error) {
     console.error('GigaChat error:', error);
@@ -117,12 +134,11 @@ function getSystemPrompt(level) {
   return prompts[level] || prompts['Понимание себя'];
 }
 
-// === Обработчик нажатий на кнопки меню ===
+// --- Обработчик нажатий на кнопки меню ---
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
 
-  // Пропускаем команды
   if (text.startsWith('/')) return;
 
   const levelMap = {
@@ -136,27 +152,16 @@ bot.on('message', async (msg) => {
   const level = levelMap[text];
   if (!level) return;
 
-  // Показываем "печатает"
   await bot.sendChatAction(chatId, 'typing');
-
   const initialPrompt = `Я выбрал тему "${level}". Поговори со мной об этом.`;
   const response = await getGigaChatResponse(initialPrompt, level);
-
   await bot.sendMessage(chatId, response, { parse_mode: 'Markdown' });
 });
 
-// === Express сервер для WebApp ===
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.use(cors());
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
-
+// --- Эндпоинт проверки подписки (из WebApp) ---
 const CHANNEL_USERNAME = process.env.CHANNEL_USERNAME;
 const BOT_TOKEN = process.env.BOT_TOKEN;
 
-// Эндпоинт проверки подписки (вызывается из WebApp)
 app.post('/api/check-sub', async (req, res) => {
   const { userId } = req.body;
   if (!userId) {
@@ -170,7 +175,6 @@ app.post('/api/check-sub', async (req, res) => {
     const isMember = ['member', 'administrator', 'creator'].includes(status);
 
     if (isMember) {
-      // Вместо отправки секретной ссылки вызываем главное меню
       await sendMainMenu(userId);
     }
 
@@ -182,7 +186,8 @@ app.post('/api/check-sub', async (req, res) => {
   }
 });
 
-// Запуск сервера
+// --- Запуск сервера ---
 app.listen(PORT, () => {
-  console.log(`WebApp и бот запущены. Порт: ${PORT}`);
+  console.log(`Сервер запущен на порту ${PORT}`);
+  console.log(`Webhook URL: ${webAppUrl}/webhook`);
 });
