@@ -4,7 +4,19 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const path = require('path');
-const GigaChat = require('gigachat');
+
+// Правильный импорт GigaChat (пробуем разные варианты, но этот должен работать)
+let GigaChat;
+try {
+    GigaChat = require('gigachat').default; // для новых версий
+} catch (e) {
+    try {
+        GigaChat = require('gigachat'); // для старых версий
+    } catch (e2) {
+        console.error('Не удалось загрузить GigaChat. Установите пакет: npm install gigachat');
+        process.exit(1);
+    }
+}
 const { Agent } = require('node:https');
 
 // --- Диагностика ---
@@ -23,7 +35,7 @@ const webAppUrl = process.env.WEBAPP_URL;
 // --- Создаём бота без polling (только для отправки сообщений) ---
 const bot = new TelegramBot(token);
 
-// --- Express сервер (будет принимать вебхуки) ---
+// --- Express сервер (принимает вебхуки) ---
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -39,7 +51,7 @@ bot.setWebHook(webhookUrl).then(() => {
   console.error('Ошибка установки вебхука:', err);
 });
 
-// --- Обработчик вебхука (Telegram будет присылать сюда обновления) ---
+// --- Обработчик вебхука ---
 app.post('/webhook', (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
@@ -94,12 +106,21 @@ async function sendMainMenu(chatId) {
   });
 }
 
-// --- GigaChat функции ---
+// --- Функция для GigaChat ---
 async function getGigaChatResponse(userMessage, level) {
+  // Настройка HTTPS-агента (отключаем проверку сертификата для упрощения)
   const httpsAgent = new Agent({ rejectUnauthorized: false });
+
+  // Проверяем, что credentials переданы
+  if (!process.env.GIGACHAT_CREDENTIALS) {
+    console.error('GIGACHAT_CREDENTIALS не заданы');
+    return 'Извините, нейросеть временно недоступна.';
+  }
+
+  // Создаём экземпляр GigaChat
   const client = new GigaChat({
     credentials: process.env.GIGACHAT_CREDENTIALS,
-    scope: 'GIGACHAT_API_PERS',
+    scope: 'GIGACHAT_API_PERS', // для физических лиц
     model: 'GigaChat',
     httpsAgent: httpsAgent,
     timeout: 60
@@ -159,7 +180,7 @@ bot.on('message', async (msg) => {
 });
 
 // --- Эндпоинт проверки подписки (из WebApp) ---
-const CHANNEL_USERNAME = process.env.CHANNEL_USERNAME;
+const CHANNEL_USERNAME = process.env.CHANNEL_USERNAME; // теперь это числовой ID, например -1002445645780
 const BOT_TOKEN = process.env.BOT_TOKEN;
 
 app.post('/api/check-sub', async (req, res) => {
