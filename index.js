@@ -5,7 +5,7 @@ const cors = require('cors');
 const axios = require('axios');
 const path = require('path');
 
-// Корректный импорт GigaChat (пробуем разные варианты)
+// Импорт GigaChat (пробуем разные варианты)
 let GigaChat;
 try {
   GigaChat = require('gigachat').default;
@@ -19,10 +19,10 @@ try {
 }
 const { Agent } = require('node:https');
 
-// Хранилище тем
+// Хранилище последней темы для каждого пользователя
 const userTopics = new Map();
 
-// Диагностика
+// --- Диагностика переменных окружения ---
 console.log('=== DIAGNOSTICS ===');
 console.log('BOT_TOKEN defined:', !!process.env.BOT_TOKEN);
 console.log('BOT_TOKEN length:', process.env.BOT_TOKEN ? process.env.BOT_TOKEN.length : 0);
@@ -34,7 +34,11 @@ console.log('====================');
 
 const token = process.env.BOT_TOKEN;
 const webAppUrl = process.env.WEBAPP_URL;
+
+// --- Инициализация бота (без polling) ---
 const bot = new TelegramBot(token);
+
+// --- Express сервер ---
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -42,6 +46,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
+// --- Установка вебхука ---
 const webhookUrl = `${webAppUrl}/webhook`;
 bot.setWebHook(webhookUrl).then(() => {
   console.log(`Webhook установлен на ${webhookUrl}`);
@@ -49,31 +54,42 @@ bot.setWebHook(webhookUrl).then(() => {
   console.error('Ошибка установки вебхука:', err);
 });
 
+// --- Обработчик вебхука (с диагностикой) ---
 app.post('/webhook', (req, res) => {
+  console.log('📩 Получен POST запрос на /webhook');
   bot.processUpdate(req.body);
   res.sendStatus(200);
 });
 
+// --- Обработка команды /start ---
 bot.onText(/\/start/, (msg) => {
-  bot.sendMessage(msg.chat.id, '👋 Привет! Чтобы получить доступ, нажмите кнопку ниже для проверки подписки.', {
+  const chatId = msg.chat.id;
+  bot.sendMessage(chatId, '👋 Привет! Чтобы получить доступ, нажмите кнопку ниже для проверки подписки.', {
     reply_markup: {
-      inline_keyboard: [[{ text: '🔎 Проверить подписку', web_app: { url: webAppUrl } }]]
+      inline_keyboard: [
+        [{
+          text: '🔎 Проверить подписку',
+          web_app: { url: webAppUrl }
+        }]
+      ]
     }
   });
 });
 
+// --- Функция отправки главного меню ---
 async function sendMainMenu(chatId) {
   const menuMessage = `
 ✨ *Добро пожаловать в «Настройщик души»* ✨
 
-Выберите тему:
+Выберите тему, с которой хотите поработать:
 
-🌿 *Безопасность* — тревога
-💗 *Принятие* — одиночество
-🧩 *Понимание себя* — «кто я?»
-🌟 *Смысл* — потерян ориентир
-🕊️ *Свобода* — «в клетке»
+🌿 *Безопасность* — когда тревожно и неспокойно
+💗 *Принятие* — когда чувствуете одиночество
+🧩 *Понимание себя* — когда «не знаю, кто я»
+🌟 *Смысл* — когда потерян ориентир
+🕊️ *Свобода* — когда «в клетке»
   `;
+
   const keyboard = {
     reply_markup: {
       keyboard: [
@@ -83,26 +99,36 @@ async function sendMainMenu(chatId) {
         [{ text: '🌟 Смысл' }],
         [{ text: '🕊️ Свобода' }]
       ],
-      resize_keyboard: true
+      resize_keyboard: true,
+      one_time_keyboard: false
     }
   };
-  await bot.sendMessage(chatId, menuMessage, { parse_mode: 'Markdown', ...keyboard });
+
+  await bot.sendMessage(chatId, menuMessage, {
+    parse_mode: 'Markdown',
+    ...keyboard
+  });
 }
 
+// --- Функция для GigaChat ---
 async function getGigaChatResponse(userMessage, level) {
   const httpsAgent = new Agent({ rejectUnauthorized: false });
+
   if (!process.env.GIGACHAT_CREDENTIALS) {
     console.error('GIGACHAT_CREDENTIALS не заданы');
     return 'Извините, нейросеть временно недоступна.';
   }
+
   const client = new GigaChat({
     credentials: process.env.GIGACHAT_CREDENTIALS,
-    scope: 'GIGACHAT_API_PERS',
+    scope: 'GIGACHAT_API_PERS', // для физических лиц
     model: 'GigaChat',
     httpsAgent: httpsAgent,
     timeout: 60
   });
+
   const systemPrompt = getSystemPrompt(level);
+
   try {
     console.log(`[GigaChat] Запрос, тема: ${level}, сообщение: "${userMessage.substring(0,50)}..."`);
     const response = await client.chat({
@@ -113,37 +139,39 @@ async function getGigaChatResponse(userMessage, level) {
       temperature: 0.7,
       max_tokens: 500
     });
-    const answer = response.choices[0]?.message.content || 'Нет ответа';
+    const answer = response.choices[0]?.message.content || 'Не удалось сгенерировать ответ.';
     console.log(`[GigaChat] Ответ получен, длина: ${answer.length}`);
     return answer;
   } catch (error) {
-    console.error('[GigaChat] Ошибка:', error.message);
-    return 'Извините, сейчас не могу ответить. Попробуйте позже.';
+    console.error('[GigaChat] Ошибка:', error.message, error.stack);
+    return 'Извините, сейчас я не могу ответить. Попробуйте позже.';
   }
 }
 
 function getSystemPrompt(level) {
   const prompts = {
-    'Безопасность': 'Ты — психологический помощник. Тема "Безопасность" (тревога, страх). Помоги через технику принятия, задавай вопросы, предлагай упражнения. Будь мягким.',
-    'Принятие': 'Ты — психологический помощник. Тема "Принятие" (одиночество, любовь). Исследуй чувства, помогай признать их.',
-    'Понимание себя': 'Ты — психологический помощник. Тема "Понимание себя" (самооценка, внутренний диалог). Помоги услышать разные части себя.',
-    'Смысл': 'Ты — психологический помощник. Тема "Смысл" (потеря ориентира). Не давай готовых ответов, помогай искать внутри.',
-    'Свобода': 'Ты — психологический помощник. Тема "Свобода" (ощущение ограничений). Исследуй, что создаёт чувство клетки, предлагай маленькие шаги.'
+    'Безопасность': 'Ты — психологический помощник. Пользователь выбрал тему "Безопасность" (тревога, страх). Помоги ему через технику принятия, задавай вопросы, предлагай простые упражнения. Будь мягким и поддерживающим.',
+    'Принятие': 'Ты — психологический помощник. Тема: "Принятие" (одиночество, потребность в любви). Исследуй чувства пользователя, помогай признать их, предлагай упражнения на самоподдержку.',
+    'Понимание себя': 'Ты — психологический помощник. Тема: "Понимание себя" (самооценка, внутренний диалог). Помоги пользователю услышать разные части себя, задавай вопросы о его ценностях.',
+    'Смысл': 'Ты — психологический помощник. Тема: "Смысл" (потеря ориентира). Не давай готовых ответов, помогай искать внутри себя, спрашивай о том, что раньше приносило радость.',
+    'Свобода': 'Ты — психологический помощник. Тема: "Свобода" (ощущение ограничений). Исследуй, что именно создаёт чувство клетки, помогай признать это, предлагай маленькие шаги для расширения пространства выбора.'
   };
   return prompts[level] || prompts['Понимание себя'];
 }
 
+// --- Обработчик всех текстовых сообщений (с подробной диагностикой) ---
 bot.on('message', async (msg) => {
-  console.log('=== ВХОДЯЩЕЕ СООБЩЕНИЕ ===');
+  console.log('=== ВХОДЯЩЕЕ СООБЩЕНИЕ В ОБРАБОТЧИК ===');
   console.log('Chat ID:', msg.chat.id);
-  console.log('Текст:', msg.text);
+  console.log('Текст сообщения:', msg.text);
   const currentTopic = userTopics.get(msg.chat.id);
-  console.log('Текущая тема:', currentTopic);
+  console.log('Текущая тема для этого пользователя:', currentTopic);
 
   const chatId = msg.chat.id;
   const text = msg.text;
+
   if (text.startsWith('/')) {
-    console.log('Игнорируем команду');
+    console.log('Это команда, игнорируем');
     return;
   }
 
@@ -155,50 +183,65 @@ bot.on('message', async (msg) => {
     '🕊️ Свобода': 'Свобода'
   };
 
+  // Если сообщение совпадает с кнопкой меню — запоминаем тему и отвечаем
   if (levelMap[text]) {
     const level = levelMap[text];
     userTopics.set(chatId, level);
-    console.log(`Установлена тема для ${chatId}: ${level}`);
+    console.log(`✅ Установлена тема для пользователя ${chatId}: ${level}`);
+
     await bot.sendChatAction(chatId, 'typing');
     const initialPrompt = `Я выбрал тему "${level}". Поговори со мной об этом.`;
     const response = await getGigaChatResponse(initialPrompt, level);
     await bot.sendMessage(chatId, response, { parse_mode: 'Markdown' });
-    console.log('Ответ на приветствие отправлен');
+    console.log('✅ Ответ на приветствие отправлен');
     return;
   }
 
+  // Если это не выбор темы, проверяем, есть ли активная тема
   const currentLevel = userTopics.get(chatId);
   if (!currentLevel) {
-    console.log('Нет активной темы, сообщение проигнорировано');
+    console.log('⛔ Нет активной темы, сообщение проигнорировано');
     return;
   }
 
-  console.log(`Есть активная тема: ${currentLevel}, отправляем в GigaChat`);
+  // Отправляем сообщение пользователя в GigaChat в рамках текущей темы
+  console.log(`➡️ Есть активная тема: ${currentLevel}, отправляем в GigaChat`);
   await bot.sendChatAction(chatId, 'typing');
   const response = await getGigaChatResponse(text, currentLevel);
   await bot.sendMessage(chatId, response, { parse_mode: 'Markdown' });
-  console.log('Ответ отправлен');
+  console.log('✅ Ответ на продолжение диалога отправлен');
 });
 
-const CHANNEL_USERNAME = process.env.CHANNEL_USERNAME;
+// --- Эндпоинт проверки подписки (из WebApp) ---
+const CHANNEL_USERNAME = process.env.CHANNEL_USERNAME; // числовой ID, например -1002445645780
 const BOT_TOKEN = process.env.BOT_TOKEN;
+
 app.post('/api/check-sub', async (req, res) => {
   const { userId } = req.body;
-  if (!userId) return res.status(400).json({ ok: false, error: 'userId required' });
+  if (!userId) {
+    return res.status(400).json({ ok: false, error: 'userId required' });
+  }
+
   try {
     const url = `https://api.telegram.org/bot${BOT_TOKEN}/getChatMember?chat_id=${CHANNEL_USERNAME}&user_id=${userId}`;
     const tgRes = await axios.get(url);
     const status = tgRes.data.result.status;
     const isMember = ['member', 'administrator', 'creator'].includes(status);
-    if (isMember) await sendMainMenu(userId);
+
+    if (isMember) {
+      await sendMainMenu(userId);
+    }
+
     res.json({ ok: true, isMember });
+
   } catch (e) {
-    console.error('Ошибка проверки:', e.message);
-    res.status(500).json({ ok: false, error: 'Ошибка проверки' });
+    console.error(`Ошибка проверки подписки для userId=${userId}:`, e.response ? e.response.data : e.message);
+    res.status(500).json({ ok: false, error: 'Ошибка проверки на стороне сервера.' });
   }
 });
 
+// --- Запуск сервера ---
 app.listen(PORT, () => {
-  console.log(`Сервер запущен на порту ${PORT}`);
-  console.log(`Webhook URL: ${webAppUrl}/webhook`);
+  console.log(`✅ Сервер запущен на порту ${PORT}`);
+  console.log(`✅ Webhook URL: ${webAppUrl}/webhook`);
 });
