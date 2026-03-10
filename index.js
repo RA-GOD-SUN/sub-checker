@@ -6,7 +6,8 @@ const path = require('path');
 
 console.log('=== MINIMAL DIAGNOSTICS ===');
 console.log('BOT_TOKEN defined:', !!process.env.BOT_TOKEN);
-console.log('====================');
+console.log('WEBAPP_URL defined:', !!process.env.WEBAPP_URL);
+console.log('===========================');
 
 const token = process.env.BOT_TOKEN;
 const webAppUrl = process.env.WEBAPP_URL;
@@ -26,21 +27,19 @@ bot.setWebHook(webhookUrl).then(() => {
 });
 
 app.post('/webhook', (req, res) => {
+  console.log('Получен POST запрос на /webhook');
   bot.processUpdate(req.body);
   res.sendStatus(200);
 });
 
-// Обработка /start
 bot.onText(/\/start/, (msg) => {
-  bot.sendMessage(msg.chat.id, '👋 Привет! Это тестовая версия.');
+  console.log(`Команда /start от ${msg.chat.id}`);
+  bot.sendMessage(msg.chat.id, '👋 Привет! Я эхо-бот. Напиши что-нибудь.');
 });
 
-// Обработка всех сообщений
 bot.on('message', (msg) => {
-  const chatId = msg.chat.id;
-  const text = msg.text;
-  console.log(`Получено сообщение: "${text}" от ${chatId}`);
-  bot.sendMessage(chatId, `Вы написали: "${text}"`);
+  console.log(`Получено сообщение от ${msg.chat.id}: "${msg.text}"`);
+  bot.sendMessage(msg.chat.id, `Вы написали: "${msg.text}"`);
 });
 
 app.listen(PORT, () => {
