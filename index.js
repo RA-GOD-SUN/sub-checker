@@ -5,19 +5,22 @@ const cors = require('cors');
 const axios = require('axios');
 const path = require('path');
 
-// Правильный импорт GigaChat (пробуем разные варианты, но этот должен работать)
+// Корректный импорт GigaChat (пробуем разные варианты)
 let GigaChat;
 try {
-    GigaChat = require('gigachat').default; // для новых версий
+  GigaChat = require('gigachat').default; // для новых версий
 } catch (e) {
-    try {
-        GigaChat = require('gigachat'); // для старых версий
-    } catch (e2) {
-        console.error('Не удалось загрузить GigaChat. Установите пакет: npm install gigachat');
-        process.exit(1);
-    }
+  try {
+    GigaChat = require('gigachat'); // для старых версий
+  } catch (e2) {
+    console.error('Не удалось загрузить GigaChat. Установите пакет: npm install gigachat');
+    process.exit(1);
+  }
 }
 const { Agent } = require('node:https');
+
+// --- Хранилище последней выбранной темы для каждого пользователя ---
+const userTopics = new Map(); // ключ: chatId, значение: текущая тема
 
 // --- Диагностика ---
 console.log('=== DIAGNOSTICS ===');
@@ -44,7 +47,7 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // === Установка вебхука при запуске ===
-const webhookUrl = `${webAppUrl}/webhook`; // путь для вебхука
+const webhookUrl = `${webAppUrl}/webhook`;
 bot.setWebHook(webhookUrl).then(() => {
   console.log(`Webhook установлен на ${webhookUrl}`);
 }).catch(err => {
@@ -108,16 +111,13 @@ async function sendMainMenu(chatId) {
 
 // --- Функция для GigaChat ---
 async function getGigaChatResponse(userMessage, level) {
-  // Настройка HTTPS-агента (отключаем проверку сертификата для упрощения)
   const httpsAgent = new Agent({ rejectUnauthorized: false });
 
-  // Проверяем, что credentials переданы
   if (!process.env.GIGACHAT_CREDENTIALS) {
     console.error('GIGACHAT_CREDENTIALS не заданы');
     return 'Извините, нейросеть временно недоступна.';
   }
 
-  // Создаём экземпляр GigaChat
   const client = new GigaChat({
     credentials: process.env.GIGACHAT_CREDENTIALS,
     scope: 'GIGACHAT_API_PERS', // для физических лиц
@@ -155,12 +155,12 @@ function getSystemPrompt(level) {
   return prompts[level] || prompts['Понимание себя'];
 }
 
-// --- Обработчик нажатий на кнопки меню ---
+// --- Обработчик всех текстовых сообщений ---
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
 
-  if (text.startsWith('/')) return;
+  if (text.startsWith('/')) return; // игнорируем команды
 
   const levelMap = {
     '🌿 Безопасность': 'Безопасность',
@@ -170,12 +170,27 @@ bot.on('message', async (msg) => {
     '🕊️ Свобода': 'Свобода'
   };
 
-  const level = levelMap[text];
-  if (!level) return;
+  // Если сообщение совпадает с одной из кнопок меню — запоминаем тему и отправляем приветствие
+  if (levelMap[text]) {
+    const level = levelMap[text];
+    userTopics.set(chatId, level);
+    await bot.sendChatAction(chatId, 'typing');
+    const initialPrompt = `Я выбрал тему "${level}". Поговори со мной об этом.`;
+    const response = await getGigaChatResponse(initialPrompt, level);
+    await bot.sendMessage(chatId, response, { parse_mode: 'Markdown' });
+    return;
+  }
 
+  // Если сообщение не является выбором темы, проверяем, есть ли у пользователя текущая тема
+  const currentLevel = userTopics.get(chatId);
+  if (!currentLevel) {
+    // Нет активной темы — игнорируем (можно отправить подсказку, но пока молчим)
+    return;
+  }
+
+  // Отправляем сообщение пользователя в GigaChat в рамках текущей темы
   await bot.sendChatAction(chatId, 'typing');
-  const initialPrompt = `Я выбрал тему "${level}". Поговори со мной об этом.`;
-  const response = await getGigaChatResponse(initialPrompt, level);
+  const response = await getGigaChatResponse(text, currentLevel);
   await bot.sendMessage(chatId, response, { parse_mode: 'Markdown' });
 });
 
