@@ -93,3 +93,38 @@ app.post('/api/check-sub', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`WebApp и бот запущены. WebApp: http://localhost:${PORT}`);
 });
+
+// Функция отправки главного меню
+async function sendMainMenu(chatId) {
+  const menuMessage = `
+✨ *Добро пожаловать в «Настройщик души»* ✨
+
+Выберите тему, с которой хотите поработать:
+
+🌿 *Безопасность* — когда тревожно и неспокойно
+💗 *Принятие* — когда чувствуете одиночество
+🧩 *Понимание себя* — когда «не знаю, кто я»
+🌟 *Смысл* — когда потерян ориентир
+🕊️ *Свобода* — когда «в клетке»
+  `;
+
+  // Создаём клавиатуру с 5 кнопками
+  const keyboard = {
+    reply_markup: {
+      keyboard: [
+        [{ text: '🌿 Безопасность' }],
+        [{ text: '💗 Принятие' }],
+        [{ text: '🧩 Понимание себя' }],
+        [{ text: '🌟 Смысл' }],
+        [{ text: '🕊️ Свобода' }]
+      ],
+      resize_keyboard: true,
+      one_time_keyboard: false
+    }
+  };
+
+  await bot.sendMessage(chatId, menuMessage, { 
+    parse_mode: 'Markdown',
+    ...keyboard 
+  });
+}
