@@ -1,0 +1,17 @@
+{
+  "name": "sub-checker-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot with subscription check",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "node-telegram-bot-api": "^0.61.0",
+    "express": "^4.18.2",
+    "dotenv": "^16.0.3"
+  },
+  "engines": {
+    "node": "18.x"
+  }
+}
