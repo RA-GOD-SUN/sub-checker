@@ -1,7 +1,7 @@
 {
   "name": "sub-checker-bot",
   "version": "1.0.0",
-  "description": "Telegram bot with subscription check",
+  "description": "Telegram bot with subscription check and GigaChat integration",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -11,6 +11,7 @@
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
+    "gigachat": "^0.0.18",
     "node-telegram-bot-api": "^0.61.0"
   },
   "engines": {
