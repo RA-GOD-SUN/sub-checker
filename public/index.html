@@ -4,47 +4,133 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Проверка подписки</title>
-    <link rel="stylesheet" href="style.css">
-    <script src="https://telegram.org/js/telegram-web-app.js" defer></script>
-    <script src="script.js" defer></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background: #f0f2f5;
+            padding: 16px;
+            box-sizing: border-box;
+        }
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            max-width: 400px;
+            width: 100%;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        h1 {
+            font-size: 24px;
+            margin-bottom: 16px;
+            color: #1e1e1e;
+        }
+        .status {
+            font-size: 18px;
+            margin: 20px 0;
+            padding: 16px;
+            border-radius: 8px;
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+        }
+        .success {
+            color: #0b5e42;
+            background: #d4edda;
+            border-color: #c3e6cb;
+        }
+        .error {
+            color: #721c24;
+            background: #f8d7da;
+            border-color: #f5c6cb;
+        }
+        .info {
+            color: #004085;
+            background: #cce5ff;
+            border-color: #b8daff;
+        }
+        a.button {
+            display: inline-block;
+            background: #0088cc;
+            color: white;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: 500;
+            margin-top: 16px;
+            transition: background 0.2s;
+        }
+        a.button:hover {
+            background: #006699;
+        }
+        .link {
+            color: #0088cc;
+            word-break: break-all;
+        }
+    </style>
 </head>
 <body>
-    <main class="container">
-        <div id="initial-state">
-            <div class="icon">
-                <img src="https://img.icons8.com/fluency/96/telegram-app.png" alt="Telegram Icon"/>
-            </div>
-            <h1>Проверка подписки</h1>
-            <p>Нажмите кнопку, чтобы проверить, подписаны ли вы на наш канал.</p>
-            <button id="check-button" class="button-primary">Проверить</button>
-        </div>
+    <div class="card">
+        <h1>🔍 Проверка подписки</h1>
+        <div id="status" class="status info">Проверяем...</div>
+        <div id="action"></div>
+    </div>
 
-        <div id="loading-state" class="hidden">
-            <div class="spinner"></div>
-            <p>Проверяем ваши данные...</p>
-        </div>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script>
+        // Инициализация Telegram WebApp
+        const tg = window.Telegram.WebApp;
+        tg.ready();
+        tg.expand(); // разворачиваем на весь экран
 
-        <div id="success-state" class="hidden">
-            <div class="icon success">✓</div>
-            <h1>Доступ предоставлен!</h1>
-            <p>Спасибо за подписку. Вот ваша ссылка:</p>
-            <a id="secret-link" href="#" class="button-primary" target="_blank">Получить контент</a>
-        </div>
+        // Получаем данные пользователя
+        const userId = tg.initDataUnsafe?.user?.id;
 
-        <div id="error-not-subscribed-state" class="hidden">
-            <div class="icon error">✗</div>
-            <h1>Вы не подписаны</h1>
-            <p>Пожалуйста, подпишитесь на наш канал, чтобы получить доступ.</p>
-            <a id="channel-link" href="#" class="button-secondary" target="_blank">Подписаться на канал</a>
-            <button id="retry-button" class="button-primary">Я подписался, проверить снова</button>
-        </div>
-        
-         <div id="error-general-state" class="hidden">
-            <div class="icon error">!</div>
-            <h1>Произошла ошибка</h1>
-            <p id="error-message">Не удалось выполнить проверку. Попробуйте, пожалуйста, позже.</p>
-             <button id="retry-button-general" class="button-primary">Попробовать ещё</button>
-        </div>
-    </main>
+        const statusDiv = document.getElementById('status');
+        const actionDiv = document.getElementById('action');
+
+        if (!userId) {
+            statusDiv.className = 'status error';
+            statusDiv.innerText = 'Ошибка: не удалось получить ID пользователя.';
+            actionDiv.innerHTML = '';
+        } else {
+            // Отправляем запрос на сервер для проверки подписки
+            fetch('/api/check-sub', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ userId })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.ok) {
+                    if (data.isMember) {
+                        statusDiv.className = 'status success';
+                        statusDiv.innerText = '✅ Вы подписаны на канал!';
+                        actionDiv.innerHTML = 'Меню уже отправлено в чат.';
+                    } else {
+                        statusDiv.className = 'status error';
+                        statusDiv.innerText = '❌ Вы не подписаны на канал.';
+                        actionDiv.innerHTML = '<a href="https://t.me/+GcITzLO3UEFkMDVi" target="_blank" class="button">📢 Подписаться</a>';
+                    }
+                } else {
+                    statusDiv.className = 'status error';
+                    statusDiv.innerText = 'Ошибка сервера: ' + (data.error || 'неизвестная ошибка');
+                    actionDiv.innerHTML = '<button onclick="window.location.reload()" class="button">🔄 Попробовать ещё раз</button>';
+                }
+            })
+            .catch(error => {
+                console.error('Ошибка:', error);
+                statusDiv.className = 'status error';
+                statusDiv.innerText = 'Ошибка соединения с сервером.';
+                actionDiv.innerHTML = '<button onclick="window.location.reload()" class="button">🔄 Попробовать ещё раз</button>';
+            });
+        }
+    </script>
 </body>
 </html>
