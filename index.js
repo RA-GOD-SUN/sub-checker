@@ -13,7 +13,7 @@ const axios = require('axios');
 const path = require('path');
 
 // --- Telegram Bot ---
-const token = 8712789626:AAGQIT_FCpccvMpIrXHuuoZpx2anK1FBWGs;
+const token = '8712789626:AAGQIT_FCpccvMpIrXHuuoZpx2anK1FBWGs';
 const webAppUrl = process.env.WEBAPP_URL;
 const bot = new TelegramBot(token, { polling: true });
 
@@ -83,4 +83,5 @@ app.listen(PORT, () => {
   console.log(`WebApp и бот запущены. WebApp: http://localhost:${PORT}`);
 
 });
+
 
