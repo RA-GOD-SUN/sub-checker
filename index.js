@@ -129,6 +129,7 @@ async function getGigaChatResponse(userMessage, level) {
   const systemPrompt = getSystemPrompt(level);
 
   try {
+    console.log(`[GigaChat] Отправка запроса, тема: ${level}, сообщение: "${userMessage.substring(0,50)}..."`);
     const response = await client.chat({
       messages: [
         { role: 'system', content: systemPrompt },
@@ -137,9 +138,11 @@ async function getGigaChatResponse(userMessage, level) {
       temperature: 0.7,
       max_tokens: 500
     });
-    return response.choices[0]?.message.content || 'Не удалось сгенерировать ответ.';
+    const answer = response.choices[0]?.message.content || 'Не удалось сгенерировать ответ.';
+    console.log(`[GigaChat] Получен ответ, длина: ${answer.length}`);
+    return answer;
   } catch (error) {
-    console.error('GigaChat error:', error);
+    console.error('[GigaChat] Ошибка:', error.message, error.stack);
     return 'Извините, сейчас я не могу ответить. Попробуйте позже.';
   }
 }
@@ -155,12 +158,21 @@ function getSystemPrompt(level) {
   return prompts[level] || prompts['Понимание себя'];
 }
 
-// --- Обработчик всех текстовых сообщений ---
+// --- Обработчик всех текстовых сообщений (с диагностикой) ---
 bot.on('message', async (msg) => {
+  console.log('=== ВХОДЯЩЕЕ СООБЩЕНИЕ ===');
+  console.log('Chat ID:', msg.chat.id);
+  console.log('Текст:', msg.text);
+  const currentTopic = userTopics.get(msg.chat.id);
+  console.log('Текущая тема для этого пользователя:', currentTopic);
+
   const chatId = msg.chat.id;
   const text = msg.text;
 
-  if (text.startsWith('/')) return; // игнорируем команды
+  if (text.startsWith('/')) {
+    console.log('Игнорируем команду');
+    return;
+  }
 
   const levelMap = {
     '🌿 Безопасность': 'Безопасность',
@@ -174,28 +186,34 @@ bot.on('message', async (msg) => {
   if (levelMap[text]) {
     const level = levelMap[text];
     userTopics.set(chatId, level);
+    console.log(`Установлена тема для пользователя ${chatId}: ${level}`);
+
     await bot.sendChatAction(chatId, 'typing');
     const initialPrompt = `Я выбрал тему "${level}". Поговори со мной об этом.`;
     const response = await getGigaChatResponse(initialPrompt, level);
     await bot.sendMessage(chatId, response, { parse_mode: 'Markdown' });
+    console.log(`Отправлен ответ на приветствие`);
     return;
   }
 
   // Если сообщение не является выбором темы, проверяем, есть ли у пользователя текущая тема
   const currentLevel = userTopics.get(chatId);
   if (!currentLevel) {
-    // Нет активной темы — игнорируем (можно отправить подсказку, но пока молчим)
+    console.log('Нет активной темы, сообщение проигнорировано');
+    // можно отправить подсказку, но пока молчим
     return;
   }
 
   // Отправляем сообщение пользователя в GigaChat в рамках текущей темы
+  console.log(`Есть активная тема: ${currentLevel}, отправляем в GigaChat`);
   await bot.sendChatAction(chatId, 'typing');
   const response = await getGigaChatResponse(text, currentLevel);
   await bot.sendMessage(chatId, response, { parse_mode: 'Markdown' });
+  console.log(`Ответ отправлен`);
 });
 
 // --- Эндпоинт проверки подписки (из WebApp) ---
-const CHANNEL_USERNAME = process.env.CHANNEL_USERNAME; // теперь это числовой ID, например -1002445645780
+const CHANNEL_USERNAME = process.env.CHANNEL_USERNAME; // числовой ID, например -1002445645780
 const BOT_TOKEN = process.env.BOT_TOKEN;
 
 app.post('/api/check-sub', async (req, res) => {
