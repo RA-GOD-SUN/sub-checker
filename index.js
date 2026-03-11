@@ -155,7 +155,7 @@ function formatUnsubscribedMessage(statuses) {
   const missing = statuses.filter(ch => ch.show && !ch.isMember);
   if (missing.length === 0) return null;
 
-  let text = '❌ *Для доступа необходимо подписаться на каналы:*\n\n';
+  let text = '❌ Для доступа необходимо подписаться на каналы:\n\n';
   const buttons = [];
 
   for (const ch of missing) {
@@ -343,7 +343,6 @@ bot.on('message', async (msg) => {
   if (unsubInfo) {
     console.log('❌ Пользователь не подписан на некоторые каналы (показываем)');
     await bot.sendMessage(chatId, unsubInfo.text, {
-      parse_mode: 'Markdown',
       reply_markup: { inline_keyboard: unsubInfo.buttons }
     });
     // Если не хватает подписки на обязательные, дальше не идём
