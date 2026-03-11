@@ -4,8 +4,9 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const path = require('path');
+const redis = require('redis');
 
-// --- Глобальные обработчики ошибок (чтобы видеть причину падения) ---
+// --- Глобальные обработчики ошибок ---
 process.on('uncaughtException', (err) => {
   console.error('🔥 НЕПЕРЕХВАЧЕННОЕ ИСКЛЮЧЕНИЕ:', err);
   console.error(err.stack);
@@ -15,7 +16,7 @@ process.on('unhandledRejection', (reason, promise) => {
   if (reason && reason.stack) console.error(reason.stack);
 });
 
-// --- Импорт GigaChat (с защитой от разных версий) ---
+// --- Импорт GigaChat ---
 let GigaChat;
 try {
   GigaChat = require('gigachat').default;
@@ -29,8 +30,10 @@ try {
 }
 const { Agent } = require('node:https');
 
-// --- Хранилище последней темы для каждого пользователя ---
-const userTopics = new Map();
+// --- Подключение к Redis ---
+const redisClient = redis.createClient({ url: process.env.REDIS_URL });
+redisClient.on('error', (err) => console.error('Redis Client Error', err));
+redisClient.connect().then(() => console.log('✅ Redis подключён'));
 
 // --- Чтение переменных окружения ---
 const token = process.env.BOT_TOKEN;
@@ -40,16 +43,16 @@ const webAppUrl = process.env.WEBAPP_URL;
 const CHANNEL1_ID = process.env.CHANNEL1_ID;
 const CHANNEL1_NAME = process.env.CHANNEL1_NAME || 'Основной канал';
 const CHANNEL1_LINK = process.env.CHANNEL1_LINK;
-const CHANNEL1_SHOW = process.env.CHANNEL1_SHOW !== 'false'; // по умолчанию true
+const CHANNEL1_SHOW = process.env.CHANNEL1_SHOW !== 'false';
 
-// Канал 2 (теперь тоже обязательный, но мы оставляем гибкость через переменные)
+// Канал 2
 const CHANNEL2_ID = process.env.CHANNEL2_ID;
 const CHANNEL2_NAME = process.env.CHANNEL2_NAME || 'Дополнительный канал';
 const CHANNEL2_LINK = process.env.CHANNEL2_LINK;
-const CHANNEL2_SHOW = process.env.CHANNEL2_SHOW === 'true'; // по умолчанию false
-const CHANNEL2_REQUIRED = process.env.CHANNEL2_REQUIRED === 'true'; // по умолчанию false, но мы выставим true
+const CHANNEL2_SHOW = process.env.CHANNEL2_SHOW === 'true';
+const CHANNEL2_REQUIRED = process.env.CHANNEL2_REQUIRED === 'true';
 
-// --- Диагностика (проверяем, что все переменные загружены) ---
+// --- Диагностика ---
 console.log('=== DIAGNOSTICS ===');
 console.log('BOT_TOKEN defined:', !!token);
 console.log('BOT_TOKEN length:', token ? token.length : 0);
@@ -64,9 +67,9 @@ console.log('CHANNEL2_SHOW:', CHANNEL2_SHOW);
 console.log('CHANNEL2_REQUIRED:', CHANNEL2_REQUIRED);
 console.log('WEBAPP_URL defined:', !!webAppUrl);
 console.log('GIGACHAT_CREDENTIALS defined:', !!process.env.GIGACHAT_CREDENTIALS);
+console.log('REDIS_URL defined:', !!process.env.REDIS_URL);
 console.log('====================');
 
-// --- Инициализация бота и сервера ---
 const bot = new TelegramBot(token);
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -75,7 +78,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// --- Установка вебхука ---
+// --- Вебхук ---
 const webhookUrl = `${webAppUrl}/webhook`;
 bot.setWebHook(webhookUrl).then(() => {
   console.log(`Webhook установлен на ${webhookUrl}`);
@@ -90,10 +93,9 @@ app.post('/webhook', (req, res) => {
 });
 
 // ============================================================================
-// ФУНКЦИИ ПРОВЕРКИ ПОДПИСКИ
+// ФУНКЦИИ ПРОВЕРКИ ПОДПИСКИ (без изменений)
 // ============================================================================
 
-// Проверка подписки на один канал
 async function checkSubscription(userId, channelId, channelName) {
   if (!channelId) {
     console.log(`⚠️ ${channelName} не задан, пропускаем проверку`);
@@ -114,11 +116,9 @@ async function checkSubscription(userId, channelId, channelName) {
   }
 }
 
-// Получение статуса подписки для всех каналов (проверяем все, у которых есть ID)
 async function getSubscriptionStatus(userId) {
   const statuses = [];
 
-  // Канал 1
   if (CHANNEL1_ID) {
     const sub1 = await checkSubscription(userId, CHANNEL1_ID, CHANNEL1_NAME);
     statuses.push({
@@ -127,12 +127,11 @@ async function getSubscriptionStatus(userId) {
       link: CHANNEL1_LINK,
       isMember: sub1.isMember,
       error: sub1.error,
-      required: true, // канал 1 всегда обязательный
+      required: true,
       show: CHANNEL1_SHOW
     });
   }
 
-  // Канал 2 (проверяем всегда, если задан ID)
   if (CHANNEL2_ID) {
     const sub2 = await checkSubscription(userId, CHANNEL2_ID, CHANNEL2_NAME);
     statuses.push({
@@ -150,12 +149,10 @@ async function getSubscriptionStatus(userId) {
   return statuses;
 }
 
-// Проверка, подписан ли на все обязательные каналы
 function isFullySubscribed(statuses) {
   return statuses.every(ch => !ch.required || ch.isMember);
 }
 
-// Формирование сообщения о неподписке с кнопками для каналов, у которых show=true и нет подписки
 function formatUnsubscribedMessage(statuses) {
   const missing = statuses.filter(ch => ch.show && !ch.isMember);
   if (missing.length === 0) return null;
@@ -180,7 +177,6 @@ function formatUnsubscribedMessage(statuses) {
 // ОБРАБОТЧИКИ КОМАНД
 // ============================================================================
 
-// Команда /start
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   bot.sendMessage(chatId, '👋 Привет! Чтобы получить доступ, нажмите кнопку ниже для проверки подписки.', {
@@ -195,7 +191,6 @@ bot.onText(/\/start/, (msg) => {
   });
 });
 
-// Команда /privacy (политика конфиденциальности)
 bot.onText(/\/privacy|\/policy/, (msg) => {
   const chatId = msg.chat.id;
   const policyText = `
@@ -231,7 +226,7 @@ bot.onText(/\/privacy|\/policy/, (msg) => {
 });
 
 // ============================================================================
-// ГЛАВНОЕ МЕНЮ (отправляется после успешной подписки)
+// ГЛАВНОЕ МЕНЮ
 // ============================================================================
 
 async function sendMainMenu(chatId) {
@@ -267,7 +262,7 @@ async function sendMainMenu(chatId) {
 }
 
 // ============================================================================
-// ФУНКЦИЯ ДЛЯ GigaChat (с короткими вопросными промптами)
+// ФУНКЦИЯ ДЛЯ GigaChat
 // ============================================================================
 
 async function getGigaChatResponse(userMessage, level) {
@@ -307,7 +302,6 @@ async function getGigaChatResponse(userMessage, level) {
   }
 }
 
-// Промпты для каждой темы (вопросный стиль, кратко)
 function getSystemPrompt(level) {
   const prompts = {
     'Безопасность': `Ты — психолог, работающий в кратком, вопросном стиле. Тема: "Безопасность" (тревога, страх). Твоя задача — помочь человеку исследовать его чувства, задавая открытые вопросы. Не давай готовых советов, не оценивай, не читай мораль. Задавай вопросы, которые помогут человеку самому прийти к пониманию.
@@ -369,7 +363,24 @@ function getSystemPrompt(level) {
 }
 
 // ============================================================================
-// ОСНОВНОЙ ОБРАБОТЧИК СООБЩЕНИЙ
+// ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С REDIS
+// ============================================================================
+
+async function getUserTopic(chatId) {
+  const key = `topic:${chatId}`;
+  const topic = await redisClient.get(key);
+  console.log(`📖 Из Redis получена тема для ${chatId}: ${topic}`);
+  return topic;
+}
+
+async function setUserTopic(chatId, topic) {
+  const key = `topic:${chatId}`;
+  await redisClient.set(key, topic);
+  console.log(`📝 В Redis установлена тема для ${chatId}: ${topic}`);
+}
+
+// ============================================================================
+// ОСНОВНОЙ ОБРАБОТЧИК СООБЩЕНИЙ (с Redis)
 // ============================================================================
 
 bot.on('message', async (msg) => {
@@ -380,35 +391,37 @@ bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
 
-  // Игнорируем служебные сообщения от групп/каналов (у них chatId < 0)
+  // Игнорируем служебные сообщения от групп/каналов
   if (chatId < 0) {
     console.log('⚠️ Сообщение из группы/канала, игнорируем');
     return;
   }
 
   if (text.startsWith('/')) {
-    console.log('Игнорируем команду (она уже обработана выше)');
+    console.log('Игнорируем команду');
     return;
   }
 
-  // --- 1. Проверка подписки на все каналы ---
+  // --- 1. Проверка подписки ---
   console.log('🔐 Получаем статус подписки...');
   const statuses = await getSubscriptionStatus(chatId);
   const fullySubscribed = isFullySubscribed(statuses);
   console.log(`🔐 Полностью подписан на обязательные: ${fullySubscribed}`);
 
-  // Всегда показываем недостающие каналы (у которых show=true)
   const unsubInfo = formatUnsubscribedMessage(statuses);
   if (unsubInfo) {
     console.log('❌ Пользователь не подписан на некоторые каналы (показываем)');
     await bot.sendMessage(chatId, unsubInfo.text, {
       reply_markup: { inline_keyboard: unsubInfo.buttons }
     });
-    // Если не хватает подписки на обязательные, дальше не идём
     if (!fullySubscribed) return;
   }
 
-  // --- 2. Если подписка в порядке, обрабатываем сообщение ---
+  // --- 2. Получаем текущую тему из Redis ---
+  const currentLevel = await getUserTopic(chatId);
+  console.log(`🔍 Текущая тема из Redis для ${chatId}: ${currentLevel}`);
+
+  // --- 3. Определяем, не является ли сообщение выбором новой темы ---
   const levelMap = {
     '🌿 Безопасность': 'Безопасность',
     '💗 Принятие': 'Принятие',
@@ -417,10 +430,9 @@ bot.on('message', async (msg) => {
     '🕊️ Свобода': 'Свобода'
   };
 
-  // Если сообщение совпадает с кнопкой меню
   if (levelMap[text]) {
     const level = levelMap[text];
-    userTopics.set(chatId, level);
+    await setUserTopic(chatId, level);
     console.log(`✅ Установлена тема для пользователя ${chatId}: ${level}`);
 
     await bot.sendChatAction(chatId, 'typing');
@@ -430,16 +442,14 @@ bot.on('message', async (msg) => {
     return;
   }
 
-  // Если это не выбор темы, проверяем, есть ли активная тема
-  const currentLevel = userTopics.get(chatId);
+  // --- 4. Если нет активной темы ---
   if (!currentLevel) {
-    console.log('⛔ Нет активной темы, сообщение проигнорировано');
-    // Можно отправить подсказку
+    console.log(`⛔ Нет активной темы для ${chatId}`);
     await bot.sendMessage(chatId, 'Пожалуйста, сначала выберите тему из меню.');
     return;
   }
 
-  // Отправляем сообщение пользователя в GigaChat в рамках текущей темы
+  // --- 5. Есть активная тема, отправляем в GigaChat ---
   console.log(`➡️ Есть активная тема: ${currentLevel}, отправляем в GigaChat`);
   await bot.sendChatAction(chatId, 'typing');
   const response = await getGigaChatResponse(text, currentLevel);
@@ -447,7 +457,7 @@ bot.on('message', async (msg) => {
 });
 
 // ============================================================================
-// ЭНДПОИНТ ДЛЯ ВЕБ-ПРИЛОЖЕНИЯ (ПРОВЕРКА ПОДПИСКИ)
+// ЭНДПОИНТ ДЛЯ ВЕБ-ПРИЛОЖЕНИЯ
 // ============================================================================
 
 app.post('/api/check-sub', async (req, res) => {
@@ -455,7 +465,6 @@ app.post('/api/check-sub', async (req, res) => {
   if (!userId) return res.status(400).json({ ok: false, error: 'userId required' });
 
   try {
-    // Для веб-приложения достаточно проверить первый канал (основной)
     const sub1 = await checkSubscription(userId, CHANNEL1_ID, CHANNEL1_NAME);
     if (sub1.isMember) {
       await sendMainMenu(userId);
