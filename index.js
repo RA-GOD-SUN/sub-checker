@@ -61,12 +61,12 @@ const CHANNEL1_ID = process.env.CHANNEL1_ID;
 const CHANNEL1_NAME = process.env.CHANNEL1_NAME || 'Первый канал';
 const CHANNEL1_LINK = process.env.CHANNEL1_LINK;
 
-// Данные второго канала (необязательного, если переменные не заданы — игнорируем)
+// Данные второго канала (необязательного)
 const CHANNEL2_ID = process.env.CHANNEL2_ID;
 const CHANNEL2_NAME = process.env.CHANNEL2_NAME || 'Второй канал';
 const CHANNEL2_LINK = process.env.CHANNEL2_LINK;
 
-// Флаг, обязательно ли требовать подписку на второй канал (по умолчанию true, если второй канал задан)
+// Флаг, обязательно ли требовать подписку на второй канал
 const REQUIRE_SECOND_CHANNEL = process.env.REQUIRE_SECOND_CHANNEL === 'true' && !!CHANNEL2_ID;
 
 const bot = new TelegramBot(token);
@@ -95,7 +95,7 @@ app.post('/webhook', (req, res) => {
 async function checkSubscription(userId, channelId, channelName) {
   if (!channelId) {
     console.log(`⚠️ ${channelName} не задан, пропускаем проверку`);
-    return { isMember: true, error: false }; // если канал не задан, считаем подписку успешной
+    return { isMember: true, error: false };
   }
   try {
     const url = `https://api.telegram.org/bot${token}/getChatMember?chat_id=${channelId}&user_id=${userId}`;
@@ -110,7 +110,6 @@ async function checkSubscription(userId, channelId, channelName) {
     if (e.response) {
       console.error('Детали ошибки:', e.response.data);
     }
-    // При ошибке считаем, что пользователь не подписан, чтобы не пропускать
     return { isMember: false, error: true };
   }
 }
@@ -119,7 +118,6 @@ async function checkSubscription(userId, channelId, channelName) {
 async function getSubscriptionStatus(userId) {
   const statuses = [];
 
-  // Первый канал (всегда проверяем)
   const sub1 = await checkSubscription(userId, CHANNEL1_ID, CHANNEL1_NAME);
   statuses.push({
     id: CHANNEL1_ID,
@@ -130,7 +128,6 @@ async function getSubscriptionStatus(userId) {
     required: true
   });
 
-  // Второй канал (если задан)
   if (CHANNEL2_ID) {
     const sub2 = await checkSubscription(userId, CHANNEL2_ID, CHANNEL2_NAME);
     statuses.push({
@@ -151,12 +148,12 @@ function isFullySubscribed(statuses) {
   return statuses.every(ch => !ch.required || ch.isMember);
 }
 
-// --- Формирование сообщения о неподписке с кнопками ---
+// --- Формирование сообщения о неподписке с кнопками (без Markdown) ---
 function formatUnsubscribedMessage(statuses) {
   const missing = statuses.filter(ch => ch.required && !ch.isMember);
   if (missing.length === 0) return null;
 
-  let text = '❌ *Вы не подписаны на следующие каналы:*\n\n';
+  let text = '❌ Вы не подписаны на следующие каналы:\n\n';
   const buttons = [];
 
   for (const ch of missing) {
@@ -343,12 +340,11 @@ bot.on('message', async (msg) => {
     console.log('❌ Пользователь не подписан на все обязательные каналы');
     const unsubInfo = formatUnsubscribedMessage(statuses);
     if (unsubInfo) {
+      // Отправляем без parse_mode, чтобы избежать ошибок Markdown
       await bot.sendMessage(chatId, unsubInfo.text, {
-        parse_mode: 'Markdown',
         reply_markup: { inline_keyboard: unsubInfo.buttons }
       });
     } else {
-      // Если нет недостающих каналов (странно), но отправим общее сообщение
       await bot.sendMessage(chatId, '❌ Ошибка проверки подписки. Попробуйте позже.');
     }
     return;
@@ -378,7 +374,6 @@ bot.on('message', async (msg) => {
   const currentLevel = userTopics.get(chatId);
   if (!currentLevel) {
     console.log('⛔ Нет активной темы, сообщение проигнорировано');
-    // Можно отправить подсказку
     await bot.sendMessage(chatId, 'Пожалуйста, сначала выберите тему из меню.');
     return;
   }
@@ -395,7 +390,6 @@ app.post('/api/check-sub', async (req, res) => {
   if (!userId) return res.status(400).json({ ok: false, error: 'userId required' });
 
   try {
-    // Для веб-приложения достаточно проверить первый канал (основной)
     const sub1 = await checkSubscription(userId, CHANNEL1_ID, CHANNEL1_NAME);
     if (sub1.isMember) {
       await sendMainMenu(userId);
