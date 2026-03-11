@@ -32,42 +32,39 @@ const { Agent } = require('node:https');
 // --- Хранилище последней темы ---
 const userTopics = new Map();
 
-// --- Диагностика переменных ---
-console.log('=== DIAGNOSTICS ===');
-console.log('BOT_TOKEN defined:', !!process.env.BOT_TOKEN);
-console.log('BOT_TOKEN length:', process.env.BOT_TOKEN ? process.env.BOT_TOKEN.length : 0);
-console.log('CHANNEL1_ID defined:', !!process.env.CHANNEL1_ID);
-console.log('CHANNEL1_ID value:', process.env.CHANNEL1_ID);
-console.log('CHANNEL1_NAME defined:', !!process.env.CHANNEL1_NAME);
-console.log('CHANNEL1_NAME value:', process.env.CHANNEL1_NAME);
-console.log('CHANNEL1_LINK defined:', !!process.env.CHANNEL1_LINK);
-console.log('CHANNEL2_ID defined:', !!process.env.CHANNEL2_ID);
-console.log('CHANNEL2_ID value:', process.env.CHANNEL2_ID);
-console.log('CHANNEL2_NAME defined:', !!process.env.CHANNEL2_NAME);
-console.log('CHANNEL2_NAME value:', process.env.CHANNEL2_NAME);
-console.log('CHANNEL2_LINK defined:', !!process.env.CHANNEL2_LINK);
-console.log('REQUIRE_SECOND_CHANNEL defined:', !!process.env.REQUIRE_SECOND_CHANNEL);
-console.log('REQUIRE_SECOND_CHANNEL value:', process.env.REQUIRE_SECOND_CHANNEL);
-console.log('WEBAPP_URL defined:', !!process.env.WEBAPP_URL);
-console.log('SECRET_LINK defined:', !!process.env.SECRET_LINK);
-console.log('GIGACHAT_CREDENTIALS defined:', !!process.env.GIGACHAT_CREDENTIALS);
-console.log('====================');
-
+// --- Чтение переменных окружения ---
 const token = process.env.BOT_TOKEN;
 const webAppUrl = process.env.WEBAPP_URL;
 
-// Данные первого канала (обязательного)
+// Канал 1 (всегда обязательный)
 const CHANNEL1_ID = process.env.CHANNEL1_ID;
-const CHANNEL1_NAME = process.env.CHANNEL1_NAME || 'Первый канал';
+const CHANNEL1_NAME = process.env.CHANNEL1_NAME || 'Основной канал';
 const CHANNEL1_LINK = process.env.CHANNEL1_LINK;
+const CHANNEL1_SHOW = process.env.CHANNEL1_SHOW !== 'false'; // по умолчанию true
 
-// Данные второго канала (необязательного)
+// Канал 2 (настраиваемый)
 const CHANNEL2_ID = process.env.CHANNEL2_ID;
-const CHANNEL2_NAME = process.env.CHANNEL2_NAME || 'Второй канал';
+const CHANNEL2_NAME = process.env.CHANNEL2_NAME || 'Дополнительный канал';
 const CHANNEL2_LINK = process.env.CHANNEL2_LINK;
+const CHANNEL2_SHOW = process.env.CHANNEL2_SHOW === 'true'; // по умолчанию false
+const CHANNEL2_REQUIRED = process.env.CHANNEL2_REQUIRED === 'true'; // по умолчанию false
 
-// Флаг, обязательно ли требовать подписку на второй канал
-const REQUIRE_SECOND_CHANNEL = process.env.REQUIRE_SECOND_CHANNEL === 'true' && !!CHANNEL2_ID;
+// --- Диагностика ---
+console.log('=== DIAGNOSTICS ===');
+console.log('BOT_TOKEN defined:', !!token);
+console.log('BOT_TOKEN length:', token ? token.length : 0);
+console.log('CHANNEL1_ID:', CHANNEL1_ID);
+console.log('CHANNEL1_NAME:', CHANNEL1_NAME);
+console.log('CHANNEL1_LINK:', CHANNEL1_LINK);
+console.log('CHANNEL1_SHOW:', CHANNEL1_SHOW);
+console.log('CHANNEL2_ID:', CHANNEL2_ID);
+console.log('CHANNEL2_NAME:', CHANNEL2_NAME);
+console.log('CHANNEL2_LINK:', CHANNEL2_LINK);
+console.log('CHANNEL2_SHOW:', CHANNEL2_SHOW);
+console.log('CHANNEL2_REQUIRED:', CHANNEL2_REQUIRED);
+console.log('WEBAPP_URL defined:', !!webAppUrl);
+console.log('GIGACHAT_CREDENTIALS defined:', !!process.env.GIGACHAT_CREDENTIALS);
+console.log('====================');
 
 const bot = new TelegramBot(token);
 const app = express();
@@ -107,27 +104,30 @@ async function checkSubscription(userId, channelId, channelName) {
     return { isMember, error: false };
   } catch (e) {
     console.error(`❌ Ошибка проверки подписки для канала ${channelName} (${channelId}):`, e.message);
-    if (e.response) {
-      console.error('Детали ошибки:', e.response.data);
-    }
+    if (e.response) console.error('Детали ошибки:', e.response.data);
     return { isMember: false, error: true };
   }
 }
 
-// --- Функция для получения статуса подписки на все каналы ---
+// --- Получение статуса подписки для всех каналов (проверяем все, у которых есть ID) ---
 async function getSubscriptionStatus(userId) {
   const statuses = [];
 
-  const sub1 = await checkSubscription(userId, CHANNEL1_ID, CHANNEL1_NAME);
-  statuses.push({
-    id: CHANNEL1_ID,
-    name: CHANNEL1_NAME,
-    link: CHANNEL1_LINK,
-    isMember: sub1.isMember,
-    error: sub1.error,
-    required: true
-  });
+  // Канал 1 (всегда проверяем, если задан)
+  if (CHANNEL1_ID) {
+    const sub1 = await checkSubscription(userId, CHANNEL1_ID, CHANNEL1_NAME);
+    statuses.push({
+      id: CHANNEL1_ID,
+      name: CHANNEL1_NAME,
+      link: CHANNEL1_LINK,
+      isMember: sub1.isMember,
+      error: sub1.error,
+      required: true, // канал 1 всегда обязательный
+      show: CHANNEL1_SHOW
+    });
+  }
 
+  // Канал 2 (проверяем всегда, если задан ID)
   if (CHANNEL2_ID) {
     const sub2 = await checkSubscription(userId, CHANNEL2_ID, CHANNEL2_NAME);
     statuses.push({
@@ -136,10 +136,12 @@ async function getSubscriptionStatus(userId) {
       link: CHANNEL2_LINK,
       isMember: sub2.isMember,
       error: sub2.error,
-      required: REQUIRE_SECOND_CHANNEL
+      required: CHANNEL2_REQUIRED,
+      show: CHANNEL2_SHOW
     });
   }
 
+  console.log('📋 Полный статус подписки:', JSON.stringify(statuses, null, 2));
   return statuses;
 }
 
@@ -148,12 +150,12 @@ function isFullySubscribed(statuses) {
   return statuses.every(ch => !ch.required || ch.isMember);
 }
 
-// --- Формирование сообщения о неподписке с кнопками (без Markdown) ---
+// --- Формирование сообщения о неподписке с кнопками для каналов, у которых show=true и нет подписки ---
 function formatUnsubscribedMessage(statuses) {
-  const missing = statuses.filter(ch => ch.required && !ch.isMember);
+  const missing = statuses.filter(ch => ch.show && !ch.isMember);
   if (missing.length === 0) return null;
 
-  let text = '❌ Вы не подписаны на следующие каналы:\n\n';
+  let text = '❌ *Для доступа необходимо подписаться на каналы:*\n\n';
   const buttons = [];
 
   for (const ch of missing) {
@@ -255,7 +257,7 @@ async function getGigaChatResponse(userMessage, level) {
   }
 }
 
-// --- Промпты для GigaChat (вопросный стиль) ---
+// --- Промпты (вопросный стиль) ---
 function getSystemPrompt(level) {
   const prompts = {
     'Безопасность': `Ты — психолог, работающий в кратком, вопросном стиле. Тема: "Безопасность" (тревога, страх). Твоя задача — помочь человеку исследовать его чувства, задавая открытые вопросы. Не давай готовых советов, не оценивай, не читай мораль. Задавай вопросы, которые помогут человеку самому прийти к пониманию.
@@ -330,27 +332,25 @@ bot.on('message', async (msg) => {
     return;
   }
 
-  // --- 1. Проверка подписки на все каналы ---
+  // --- 1. Проверка подписки (всегда для всех каналов) ---
   console.log('🔐 Получаем статус подписки...');
   const statuses = await getSubscriptionStatus(chatId);
   const fullySubscribed = isFullySubscribed(statuses);
-  console.log(`🔐 Полностью подписан: ${fullySubscribed}`);
+  console.log(`🔐 Полностью подписан на обязательные: ${fullySubscribed}`);
 
-  if (!fullySubscribed) {
-    console.log('❌ Пользователь не подписан на все обязательные каналы');
-    const unsubInfo = formatUnsubscribedMessage(statuses);
-    if (unsubInfo) {
-      // Отправляем без parse_mode, чтобы избежать ошибок Markdown
-      await bot.sendMessage(chatId, unsubInfo.text, {
-        reply_markup: { inline_keyboard: unsubInfo.buttons }
-      });
-    } else {
-      await bot.sendMessage(chatId, '❌ Ошибка проверки подписки. Попробуйте позже.');
-    }
-    return;
+  // Всегда показываем недостающие каналы (у которых show=true)
+  const unsubInfo = formatUnsubscribedMessage(statuses);
+  if (unsubInfo) {
+    console.log('❌ Пользователь не подписан на некоторые каналы (показываем)');
+    await bot.sendMessage(chatId, unsubInfo.text, {
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: unsubInfo.buttons }
+    });
+    // Если не хватает подписки на обязательные, дальше не идём
+    if (!fullySubscribed) return;
   }
 
-  // --- 2. Если подписка есть, обрабатываем сообщение ---
+  // Если подписка на обязательные есть, продолжаем диалог
   const levelMap = {
     '🌿 Безопасность': 'Безопасность',
     '💗 Принятие': 'Принятие',
@@ -374,7 +374,6 @@ bot.on('message', async (msg) => {
   const currentLevel = userTopics.get(chatId);
   if (!currentLevel) {
     console.log('⛔ Нет активной темы, сообщение проигнорировано');
-    await bot.sendMessage(chatId, 'Пожалуйста, сначала выберите тему из меню.');
     return;
   }
 
@@ -384,12 +383,13 @@ bot.on('message', async (msg) => {
   await bot.sendMessage(chatId, response, { parse_mode: 'Markdown' });
 });
 
-// --- Эндпоинт для веб-приложения ---
+// --- Эндпоинт для веб-приложения (проверка первого канала) ---
 app.post('/api/check-sub', async (req, res) => {
   const { userId } = req.body;
   if (!userId) return res.status(400).json({ ok: false, error: 'userId required' });
 
   try {
+    // Для веб-приложения достаточно проверить первый канал (основной)
     const sub1 = await checkSubscription(userId, CHANNEL1_ID, CHANNEL1_NAME);
     if (sub1.isMember) {
       await sendMainMenu(userId);
