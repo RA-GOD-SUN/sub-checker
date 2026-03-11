@@ -4,7 +4,6 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const path = require('path');
-const redis = require('redis');
 
 // --- Глобальные обработчики ошибок ---
 process.on('uncaughtException', (err) => {
@@ -30,10 +29,8 @@ try {
 }
 const { Agent } = require('node:https');
 
-// --- Подключение к Redis ---
-const redisClient = redis.createClient({ url: process.env.REDIS_URL });
-redisClient.on('error', (err) => console.error('Redis Client Error', err));
-redisClient.connect().then(() => console.log('✅ Redis подключён'));
+// --- Хранилище последней темы (в памяти, без Redis) ---
+const userTopics = new Map();
 
 // --- Чтение переменных окружения ---
 const token = process.env.BOT_TOKEN;
@@ -67,7 +64,6 @@ console.log('CHANNEL2_SHOW:', CHANNEL2_SHOW);
 console.log('CHANNEL2_REQUIRED:', CHANNEL2_REQUIRED);
 console.log('WEBAPP_URL defined:', !!webAppUrl);
 console.log('GIGACHAT_CREDENTIALS defined:', !!process.env.GIGACHAT_CREDENTIALS);
-console.log('REDIS_URL defined:', !!process.env.REDIS_URL);
 console.log('====================');
 
 const bot = new TelegramBot(token);
@@ -93,7 +89,7 @@ app.post('/webhook', (req, res) => {
 });
 
 // ============================================================================
-// ФУНКЦИИ ПРОВЕРКИ ПОДПИСКИ (без изменений)
+// ФУНКЦИИ ПРОВЕРКИ ПОДПИСКИ
 // ============================================================================
 
 async function checkSubscription(userId, channelId, channelName) {
@@ -262,7 +258,7 @@ async function sendMainMenu(chatId) {
 }
 
 // ============================================================================
-// ФУНКЦИЯ ДЛЯ GigaChat
+// ФУНКЦИЯ ДЛЯ GIGACHAT
 // ============================================================================
 
 async function getGigaChatResponse(userMessage, level) {
@@ -363,24 +359,7 @@ function getSystemPrompt(level) {
 }
 
 // ============================================================================
-// ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С REDIS
-// ============================================================================
-
-async function getUserTopic(chatId) {
-  const key = `topic:${chatId}`;
-  const topic = await redisClient.get(key);
-  console.log(`📖 Из Redis получена тема для ${chatId}: ${topic}`);
-  return topic;
-}
-
-async function setUserTopic(chatId, topic) {
-  const key = `topic:${chatId}`;
-  await redisClient.set(key, topic);
-  console.log(`📝 В Redis установлена тема для ${chatId}: ${topic}`);
-}
-
-// ============================================================================
-// ОСНОВНОЙ ОБРАБОТЧИК СООБЩЕНИЙ (с Redis)
+// ОСНОВНОЙ ОБРАБОТЧИК СООБЩЕНИЙ (с Map в памяти)
 // ============================================================================
 
 bot.on('message', async (msg) => {
@@ -417,9 +396,9 @@ bot.on('message', async (msg) => {
     if (!fullySubscribed) return;
   }
 
-  // --- 2. Получаем текущую тему из Redis ---
-  const currentLevel = await getUserTopic(chatId);
-  console.log(`🔍 Текущая тема из Redis для ${chatId}: ${currentLevel}`);
+  // --- 2. Получаем текущую тему из памяти ---
+  const currentLevel = userTopics.get(chatId);
+  console.log(`🔍 Текущая тема для ${chatId}: ${currentLevel}`);
 
   // --- 3. Определяем, не является ли сообщение выбором новой темы ---
   const levelMap = {
@@ -432,7 +411,7 @@ bot.on('message', async (msg) => {
 
   if (levelMap[text]) {
     const level = levelMap[text];
-    await setUserTopic(chatId, level);
+    userTopics.set(chatId, level);
     console.log(`✅ Установлена тема для пользователя ${chatId}: ${level}`);
 
     await bot.sendChatAction(chatId, 'typing');
