@@ -122,7 +122,7 @@ async function getSubscriptionStatus(userId) {
       link: CHANNEL1_LINK,
       isMember: sub1.isMember,
       error: sub1.error,
-      required: true, // канал 1 всегда обязательный
+      required: true,
       show: CHANNEL1_SHOW
     });
   }
@@ -323,6 +323,19 @@ bot.on('message', async (msg) => {
   console.log('=== ВХОДЯЩЕЕ СООБЩЕНИЕ ===');
   console.log('Chat ID:', msg.chat.id);
   console.log('Текст:', msg.text);
+  console.log('Тип чата:', msg.chat.type);
+
+  // Игнорируем сообщения без текста (например, служебные)
+  if (!msg.text) {
+    console.log('Сообщение без текста, игнорируем');
+    return;
+  }
+
+  // Опционально: игнорируем сообщения не из личного чата (если бот не должен работать в группах/каналах)
+  if (msg.chat.type !== 'private') {
+    console.log('Сообщение не из личного чата, игнорируем');
+    return;
+  }
 
   const chatId = msg.chat.id;
   const text = msg.text;
@@ -388,7 +401,6 @@ app.post('/api/check-sub', async (req, res) => {
   if (!userId) return res.status(400).json({ ok: false, error: 'userId required' });
 
   try {
-    // Для веб-приложения достаточно проверить первый канал (основной)
     const sub1 = await checkSubscription(userId, CHANNEL1_ID, CHANNEL1_NAME);
     if (sub1.isMember) {
       await sendMainMenu(userId);
