@@ -8,9 +8,11 @@ const path = require('path');
 // --- Глобальные обработчики ошибок ---
 process.on('uncaughtException', (err) => {
   console.error('🔥 НЕПЕРЕХВАЧЕННОЕ ИСКЛЮЧЕНИЕ:', err);
+  console.error(err.stack);
 });
 process.on('unhandledRejection', (reason, promise) => {
   console.error('🔥 НЕОБРАБОТАННЫЙ ОТКАЗ PROMISE:', reason);
+  if (reason && reason.stack) console.error(reason.stack);
 });
 
 // --- Импорт GigaChat ---
@@ -35,7 +37,17 @@ console.log('=== DIAGNOSTICS ===');
 console.log('BOT_TOKEN defined:', !!process.env.BOT_TOKEN);
 console.log('BOT_TOKEN length:', process.env.BOT_TOKEN ? process.env.BOT_TOKEN.length : 0);
 console.log('CHANNEL1_ID defined:', !!process.env.CHANNEL1_ID);
+console.log('CHANNEL1_ID value:', process.env.CHANNEL1_ID);
+console.log('CHANNEL1_NAME defined:', !!process.env.CHANNEL1_NAME);
+console.log('CHANNEL1_NAME value:', process.env.CHANNEL1_NAME);
+console.log('CHANNEL1_LINK defined:', !!process.env.CHANNEL1_LINK);
 console.log('CHANNEL2_ID defined:', !!process.env.CHANNEL2_ID);
+console.log('CHANNEL2_ID value:', process.env.CHANNEL2_ID);
+console.log('CHANNEL2_NAME defined:', !!process.env.CHANNEL2_NAME);
+console.log('CHANNEL2_NAME value:', process.env.CHANNEL2_NAME);
+console.log('CHANNEL2_LINK defined:', !!process.env.CHANNEL2_LINK);
+console.log('REQUIRE_SECOND_CHANNEL defined:', !!process.env.REQUIRE_SECOND_CHANNEL);
+console.log('REQUIRE_SECOND_CHANNEL value:', process.env.REQUIRE_SECOND_CHANNEL);
 console.log('WEBAPP_URL defined:', !!process.env.WEBAPP_URL);
 console.log('SECRET_LINK defined:', !!process.env.SECRET_LINK);
 console.log('GIGACHAT_CREDENTIALS defined:', !!process.env.GIGACHAT_CREDENTIALS);
@@ -43,8 +55,19 @@ console.log('====================');
 
 const token = process.env.BOT_TOKEN;
 const webAppUrl = process.env.WEBAPP_URL;
+
+// Данные первого канала (обязательного)
 const CHANNEL1_ID = process.env.CHANNEL1_ID;
+const CHANNEL1_NAME = process.env.CHANNEL1_NAME || 'Первый канал';
+const CHANNEL1_LINK = process.env.CHANNEL1_LINK;
+
+// Данные второго канала (необязательного, если переменные не заданы — игнорируем)
 const CHANNEL2_ID = process.env.CHANNEL2_ID;
+const CHANNEL2_NAME = process.env.CHANNEL2_NAME || 'Второй канал';
+const CHANNEL2_LINK = process.env.CHANNEL2_LINK;
+
+// Флаг, обязательно ли требовать подписку на второй канал (по умолчанию true, если второй канал задан)
+const REQUIRE_SECOND_CHANNEL = process.env.REQUIRE_SECOND_CHANNEL === 'true' && !!CHANNEL2_ID;
 
 const bot = new TelegramBot(token);
 const app = express();
@@ -68,31 +91,88 @@ app.post('/webhook', (req, res) => {
   res.sendStatus(200);
 });
 
-// --- Функции проверки подписки ---
-async function checkSubscription(userId, channelId) {
-  if (!channelId) return true;
+// --- Функции проверки подписки на один канал ---
+async function checkSubscription(userId, channelId, channelName) {
+  if (!channelId) {
+    console.log(`⚠️ ${channelName} не задан, пропускаем проверку`);
+    return { isMember: true, error: false }; // если канал не задан, считаем подписку успешной
+  }
   try {
     const url = `https://api.telegram.org/bot${token}/getChatMember?chat_id=${channelId}&user_id=${userId}`;
+    console.log(`🔍 Проверка подписки на ${channelName} (${channelId}) для userId ${userId}`);
     const res = await axios.get(url);
     const status = res.data.result.status;
-    return ['member', 'administrator', 'creator'].includes(status);
+    const isMember = ['member', 'administrator', 'creator'].includes(status);
+    console.log(`📊 Результат проверки ${channelName}: статус ${status}, подписан: ${isMember}`);
+    return { isMember, error: false };
   } catch (e) {
-    console.error(`Ошибка проверки подписки для канала ${channelId}:`, e.message);
-    return false;
+    console.error(`❌ Ошибка проверки подписки для канала ${channelName} (${channelId}):`, e.message);
+    if (e.response) {
+      console.error('Детали ошибки:', e.response.data);
+    }
+    // При ошибке считаем, что пользователь не подписан, чтобы не пропускать
+    return { isMember: false, error: true };
   }
 }
 
-async function checkBothSubscriptions(userId) {
-  const sub1 = await checkSubscription(userId, CHANNEL1_ID);
-  if (!sub1) return false;
+// --- Функция для получения статуса подписки на все каналы ---
+async function getSubscriptionStatus(userId) {
+  const statuses = [];
+
+  // Первый канал (всегда проверяем)
+  const sub1 = await checkSubscription(userId, CHANNEL1_ID, CHANNEL1_NAME);
+  statuses.push({
+    id: CHANNEL1_ID,
+    name: CHANNEL1_NAME,
+    link: CHANNEL1_LINK,
+    isMember: sub1.isMember,
+    error: sub1.error,
+    required: true
+  });
+
+  // Второй канал (если задан)
   if (CHANNEL2_ID) {
-    const sub2 = await checkSubscription(userId, CHANNEL2_ID);
-    return sub2;
+    const sub2 = await checkSubscription(userId, CHANNEL2_ID, CHANNEL2_NAME);
+    statuses.push({
+      id: CHANNEL2_ID,
+      name: CHANNEL2_NAME,
+      link: CHANNEL2_LINK,
+      isMember: sub2.isMember,
+      error: sub2.error,
+      required: REQUIRE_SECOND_CHANNEL
+    });
   }
-  return true;
+
+  return statuses;
 }
 
-// --- Обработка /start ---
+// --- Проверка, подписан ли на все обязательные каналы ---
+function isFullySubscribed(statuses) {
+  return statuses.every(ch => !ch.required || ch.isMember);
+}
+
+// --- Формирование сообщения о неподписке с кнопками ---
+function formatUnsubscribedMessage(statuses) {
+  const missing = statuses.filter(ch => ch.required && !ch.isMember);
+  if (missing.length === 0) return null;
+
+  let text = '❌ *Вы не подписаны на следующие каналы:*\n\n';
+  const buttons = [];
+
+  for (const ch of missing) {
+    text += `• ${ch.name}\n`;
+    if (ch.link) {
+      buttons.push([{ text: `📢 Подписаться на ${ch.name}`, url: ch.link }]);
+    } else {
+      text += `  (ссылка не указана, обратитесь к администратору)\n`;
+    }
+  }
+
+  text += '\nПосле подписки нажмите /start или отправьте любое сообщение, чтобы проверить снова.';
+  return { text, buttons };
+}
+
+// --- Обработка команды /start ---
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   bot.sendMessage(chatId, '👋 Привет! Чтобы получить доступ, нажмите кнопку ниже для проверки подписки.', {
@@ -112,7 +192,7 @@ async function sendMainMenu(chatId) {
   const menuMessage = `
 ✨ *Добро пожаловать в «Настройщик души»* ✨
 
-Выберите тему:
+Выберите тему, с которой хотите поработать:
 
 🌿 *Безопасность* — тревога, страхи
 💗 *Принятие* — одиночество, любовь
@@ -140,7 +220,7 @@ async function sendMainMenu(chatId) {
   });
 }
 
-// --- GigaChat с новым промптом для Свободы ---
+// --- Функция для GigaChat ---
 async function getGigaChatResponse(userMessage, level) {
   const httpsAgent = new Agent({ rejectUnauthorized: false });
 
@@ -167,25 +247,74 @@ async function getGigaChatResponse(userMessage, level) {
         { role: 'user', content: userMessage }
       ],
       temperature: 0.8,
-      max_tokens: 200
+      max_tokens: 250
     });
     const answer = response.choices[0]?.message.content || 'Не удалось сгенерировать ответ.';
     console.log(`[GigaChat] Ответ получен, длина: ${answer.length}`);
     return answer;
   } catch (error) {
     console.error('[GigaChat] Ошибка:', error.message, error.stack);
-    return 'Извините, сейчас я не могу ответить. Попробуйте позже.';
+    return '🚧 Извините, нейросеть временно не отвечает. Попробуйте чуть позже.';
   }
 }
 
-// --- Обновлённые промпты (Свобода изменена) ---
+// --- Промпты для GigaChat (вопросный стиль) ---
 function getSystemPrompt(level) {
   const prompts = {
-    'Безопасность': 'Ты — психолог. Тема "Безопасность". Отвечай коротко (1-3 предложения), прямо. Используй технику "признание": помоги заметить и принять чувство. Не анализируй долго.',
-    'Принятие': 'Ты — психолог. Тема "Принятие". Отвечай кратко, без нравоучений. Предложи признать чувство одиночества и спросить у него, что оно хочет.',
-    'Понимание себя': 'Ты — психолог. Тема "Понимание себя". Помоги услышать разные внутренние голоса. Например: "Какая часть тебя говорит это? А что хочет другая?" Без теорий.',
-    'Смысл': 'Ты — психолог. Тема "Смысл". Не давай готовых ответов. Спроси коротко: "Что приносило радость раньше?" Ответь максимум тремя фразами.',
-    'Свобода': 'Ты — психолог. Тема "Свобода". Помоги человеку исследовать его ощущение несвободы. Задавай короткие, прямые вопросы: "В чём именно ты чувствуешь себя несвободным?", "Ты заложник ситуации или своих мыслей?", "Если бы можно было сделать всё что угодно, что бы ты выбрал?", "Кто ты в этой истории: жертва, спасатель или тиран?" Не анализируй долго, помогай увидеть ограничения и возможные выходы. Будь мягким, но иногда чуть провокативным.'
+    'Безопасность': `Ты — психолог, работающий в кратком, вопросном стиле. Тема: "Безопасность" (тревога, страх). Твоя задача — помочь человеку исследовать его чувства, задавая открытые вопросы. Не давай готовых советов, не оценивай, не читай мораль. Задавай вопросы, которые помогут человеку самому прийти к пониманию.
+
+Примеры вопросов:
+- "Что именно вызывает у тебя тревогу?"
+- "Когда это чувство появляется?"
+- "Как твоё тело реагирует на страх?"
+- "Что ты обычно делаешь в такие моменты?"
+- "Бывало ли такое раньше? Чем это заканчивалось?"
+
+После ответа человека задавай следующий уточняющий вопрос. Не пиши длинных текстов. Будь мягким, но направляющим.`,
+
+    'Принятие': `Ты — психолог, работающий в кратком, вопросном стиле. Тема: "Принятие" (одиночество, любовь). Помоги человеку исследовать его чувство одиночества или нехватки принятия. Задавай открытые вопросы, не давай советов.
+
+Примеры вопросов:
+- "В каких ситуациях ты чувствуешь себя одиноким?"
+- "Как ты понимаешь, что тебя не принимают?"
+- "Что для тебя значит 'быть принятым'?"
+- "Есть ли люди, с которыми ты чувствуешь себя комфортно?"
+- "Что бы ты хотел изменить в отношениях с близкими?"
+
+Продолжай диалог, задавая вопросы по ответам.`,
+
+    'Понимание себя': `Ты — психолог, работающий в кратком, вопросном стиле. Тема: "Понимание себя" (самооценка, внутренний диалог). Помоги человеку услышать разные части себя.
+
+Примеры вопросов:
+- "Какая часть тебя говорит это?"
+- "А что хочет другая часть?"
+- "Когда ты впервые заметил этот внутренний голос?"
+- "Как бы ты описал свои сильные стороны?"
+- "Что тебе мешает быть собой?"
+
+Задавай вопросы, не давай готовых ответов.`,
+
+    'Смысл': `Ты — психолог, работающий в кратком, вопросном стиле. Тема: "Смысл" (потеря ориентира). Помоги человеку искать смысл внутри себя.
+
+Примеры вопросов:
+- "Что приносило тебе радость раньше?"
+- "За чем ты скучаешь?"
+- "Что для тебя важно в жизни?"
+- "Если бы у тебя была волшебная палочка, что бы ты изменил?"
+- "Были ли моменты, когда ты чувствовал себя живым?"
+
+Не давай ответов, только вопросы.`,
+
+    'Свобода': `Ты — психолог, работающий в кратком, вопросном стиле. Тема: "Свобода" (ощущение ограничений). Помоги человеку исследовать, что именно его ограничивает.
+
+Примеры вопросов:
+- "В чём именно ты чувствуешь себя несвободным?"
+- "Ты заложник ситуации или своих мыслей?"
+- "Если бы можно было сделать всё что угодно, что бы ты выбрал?"
+- "Кто ты в этой истории: жертва, спасатель или тиран?"
+- "Что случится, если ты позволишь себе быть свободным?"
+
+Задавай вопросы, помогай увидеть выходы.`
   };
   return prompts[level] || prompts['Понимание себя'];
 }
@@ -204,15 +333,28 @@ bot.on('message', async (msg) => {
     return;
   }
 
-  // Проверка подписки на оба канала
-  const isSubscribed = await checkBothSubscriptions(chatId);
-  if (!isSubscribed) {
-    console.log('❌ Пользователь не подписан на все каналы');
-    const message = `❌ Вы отписались от одного из каналов.\n\nПожалуйста, подпишитесь снова, чтобы продолжить:\n1. ${CHANNEL1_ID}\n2. ${CHANNEL2_ID || 'не задан'}\n\nПосле подписки начните диалог заново.`;
-    await bot.sendMessage(chatId, message);
+  // --- 1. Проверка подписки на все каналы ---
+  console.log('🔐 Получаем статус подписки...');
+  const statuses = await getSubscriptionStatus(chatId);
+  const fullySubscribed = isFullySubscribed(statuses);
+  console.log(`🔐 Полностью подписан: ${fullySubscribed}`);
+
+  if (!fullySubscribed) {
+    console.log('❌ Пользователь не подписан на все обязательные каналы');
+    const unsubInfo = formatUnsubscribedMessage(statuses);
+    if (unsubInfo) {
+      await bot.sendMessage(chatId, unsubInfo.text, {
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: unsubInfo.buttons }
+      });
+    } else {
+      // Если нет недостающих каналов (странно), но отправим общее сообщение
+      await bot.sendMessage(chatId, '❌ Ошибка проверки подписки. Попробуйте позже.');
+    }
     return;
   }
 
+  // --- 2. Если подписка есть, обрабатываем сообщение ---
   const levelMap = {
     '🌿 Безопасность': 'Безопасность',
     '💗 Принятие': 'Принятие',
@@ -224,7 +366,7 @@ bot.on('message', async (msg) => {
   if (levelMap[text]) {
     const level = levelMap[text];
     userTopics.set(chatId, level);
-    console.log(`✅ Установлена тема: ${level}`);
+    console.log(`✅ Установлена тема для пользователя ${chatId}: ${level}`);
 
     await bot.sendChatAction(chatId, 'typing');
     const initialPrompt = `Я выбрал тему "${level}". Поговори со мной об этом.`;
@@ -235,11 +377,13 @@ bot.on('message', async (msg) => {
 
   const currentLevel = userTopics.get(chatId);
   if (!currentLevel) {
-    console.log('⛔ Нет активной темы');
+    console.log('⛔ Нет активной темы, сообщение проигнорировано');
+    // Можно отправить подсказку
+    await bot.sendMessage(chatId, 'Пожалуйста, сначала выберите тему из меню.');
     return;
   }
 
-  console.log(`➡️ Есть тема: ${currentLevel}, отправляем в GigaChat`);
+  console.log(`➡️ Есть активная тема: ${currentLevel}, отправляем в GigaChat`);
   await bot.sendChatAction(chatId, 'typing');
   const response = await getGigaChatResponse(text, currentLevel);
   await bot.sendMessage(chatId, response, { parse_mode: 'Markdown' });
@@ -251,9 +395,12 @@ app.post('/api/check-sub', async (req, res) => {
   if (!userId) return res.status(400).json({ ok: false, error: 'userId required' });
 
   try {
-    const isMember = await checkSubscription(userId, CHANNEL1_ID);
-    if (isMember) await sendMainMenu(userId);
-    res.json({ ok: true, isMember });
+    // Для веб-приложения достаточно проверить первый канал (основной)
+    const sub1 = await checkSubscription(userId, CHANNEL1_ID, CHANNEL1_NAME);
+    if (sub1.isMember) {
+      await sendMainMenu(userId);
+    }
+    res.json({ ok: true, isMember: sub1.isMember });
   } catch (e) {
     console.error(`Ошибка проверки подписки для userId=${userId}:`, e.message);
     res.status(500).json({ ok: false, error: 'Ошибка проверки на стороне сервера.' });
