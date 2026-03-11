@@ -5,6 +5,14 @@ const cors = require('cors');
 const axios = require('axios');
 const path = require('path');
 
+// Глобальные обработчики ошибок
+process.on('uncaughtException', (err) => {
+  console.error('🔥 НЕПЕРЕХВАЧЕННОЕ ИСКЛЮЧЕНИЕ:', err);
+});
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('🔥 НЕОБРАБОТАННЫЙ ОТКАЗ PROMISE:', reason);
+});
+
 // Импорт GigaChat (пробуем разные варианты)
 let GigaChat;
 try {
