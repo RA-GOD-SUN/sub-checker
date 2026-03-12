@@ -4,6 +4,7 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const path = require('path');
+const redis = require('redis');
 
 // --- Глобальные обработчики ошибок ---
 process.on('uncaughtException', (err) => {
@@ -29,8 +30,10 @@ try {
 }
 const { Agent } = require('node:https');
 
-// --- Хранилище последней темы (в памяти, без Redis) ---
-const userTopics = new Map();
+// --- Подключение к Redis ---
+const redisClient = redis.createClient({ url: process.env.REDIS_URL });
+redisClient.on('error', (err) => console.error('Redis Client Error', err));
+redisClient.connect().then(() => console.log('✅ Redis подключён'));
 
 // --- Чтение переменных окружения ---
 const token = process.env.BOT_TOKEN;
@@ -64,6 +67,7 @@ console.log('CHANNEL2_SHOW:', CHANNEL2_SHOW);
 console.log('CHANNEL2_REQUIRED:', CHANNEL2_REQUIRED);
 console.log('WEBAPP_URL defined:', !!webAppUrl);
 console.log('GIGACHAT_CREDENTIALS defined:', !!process.env.GIGACHAT_CREDENTIALS);
+console.log('REDIS_URL defined:', !!process.env.REDIS_URL);
 console.log('====================');
 
 const bot = new TelegramBot(token);
@@ -170,6 +174,29 @@ function formatUnsubscribedMessage(statuses) {
 }
 
 // ============================================================================
+// ФУНКЦИИ ДЛЯ РАБОТЫ С ИСТОРИЕЙ В REDIS
+// ============================================================================
+
+const HISTORY_KEY_PREFIX = 'history:';
+const MAX_HISTORY = 10; // храним последние 10 сообщений
+
+async function addMessageToHistory(chatId, role, content) {
+  const key = HISTORY_KEY_PREFIX + chatId;
+  let history = await redisClient.get(key);
+  history = history ? JSON.parse(history) : [];
+  history.push({ role, content });
+  if (history.length > MAX_HISTORY) history.shift(); // удаляем самое старое
+  await redisClient.set(key, JSON.stringify(history));
+  console.log(`📝 История для ${chatId} обновлена, теперь ${history.length} сообщений`);
+}
+
+async function getHistory(chatId) {
+  const key = HISTORY_KEY_PREFIX + chatId;
+  const data = await redisClient.get(key);
+  return data ? JSON.parse(data) : [];
+}
+
+// ============================================================================
 // ОБРАБОТЧИКИ КОМАНД
 // ============================================================================
 
@@ -216,20 +243,20 @@ bot.onText(/\/privacy|\/policy/, (msg) => {
 6. *Контакты*  
    • По вопросам конфиденциальности: @Nastroyschik_dushi
 
-Последнее обновление: 11 марта 2026 г.
+Последнее обновление: 12 марта 2026 г.
   `;
   bot.sendMessage(chatId, policyText, { parse_mode: 'Markdown' });
 });
 
 // ============================================================================
-// ГЛАВНОЕ МЕНЮ
+// ГЛАВНОЕ МЕНЮ (опционально)
 // ============================================================================
 
 async function sendMainMenu(chatId) {
   const menuMessage = `
 ✨ *Добро пожаловать в «Настройщик души»* ✨
 
-Выберите тему, с которой хотите поработать:
+Выберите тему, с которой хотите поработать (или просто напишите свой вопрос):
 
 🌿 *Безопасность* — тревога, страхи
 💗 *Принятие* — одиночество, любовь
@@ -258,10 +285,10 @@ async function sendMainMenu(chatId) {
 }
 
 // ============================================================================
-// ФУНКЦИЯ ДЛЯ GIGACHAT
+// УЛУЧШЕННАЯ ФУНКЦИЯ ДЛЯ GIGACHAT (с повторными попытками и историей)
 // ============================================================================
 
-async function getGigaChatResponse(userMessage, level) {
+async function getGigaChatResponse(userMessage, history, level = null) {
   const httpsAgent = new Agent({ rejectUnauthorized: false });
 
   if (!process.env.GIGACHAT_CREDENTIALS) {
@@ -274,92 +301,83 @@ async function getGigaChatResponse(userMessage, level) {
     scope: 'GIGACHAT_API_PERS',
     model: 'GigaChat',
     httpsAgent: httpsAgent,
-    timeout: 60
+    timeout: 120, // увеличенный таймаут
   });
 
-  const systemPrompt = getSystemPrompt(level);
+  // Формируем системный промпт в зависимости от того, выбрана ли тема
+  let systemPrompt;
+  if (level && levelMap[level]) {
+    // Если тема выбрана из меню, используем специализированный промпт
+    systemPrompt = getThemePrompt(level);
+  } else {
+    // Универсальный промпт для свободного диалога
+    systemPrompt = `Ты — психолог, работающий в кратком, вопросном стиле (вдохновлён подходом Тальписа). Твоя задача — помочь человеку исследовать его чувства, задавая открытые вопросы. Используй техники:
 
-  try {
-    console.log(`[GigaChat] Запрос, тема: ${level}, сообщение: "${userMessage.substring(0,50)}..."`);
-    const response = await client.chat({
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userMessage }
-      ],
-      temperature: 0.8,
-      max_tokens: 250
-    });
-    const answer = response.choices[0]?.message.content || 'Не удалось сгенерировать ответ.';
-    console.log(`[GigaChat] Ответ получен, длина: ${answer.length}`);
-    return answer;
-  } catch (error) {
-    console.error('[GigaChat] Ошибка:', error.message, error.stack);
-    return '🚧 Извините, нейросеть временно не отвечает. Попробуйте чуть позже.';
+- Признание: помоги заметить и принять чувство («Просто признай эту тревогу и дай ей место»).
+- Работа с частями: спроси, какая часть говорит это, а что хочет другая.
+- Метафоры: если уместно, предложи простую метафору.
+- Упражнения: в конце ответа предложи короткое действие (например, «подыши и спроси эту часть, чего она на самом деле хочет»).
+
+Не давай готовых советов, не оценивай, не читай мораль. Задавай вопросы, которые помогут человеку самому прийти к пониманию. После ответа человека задавай следующий уточняющий вопрос, сохраняя связь с предыдущим. Отвечай коротко (1-3 предложения).`;
   }
+
+  // Собираем сообщения для GigaChat: системный промпт + история + текущее сообщение
+  const messages = [{ role: 'system', content: systemPrompt }];
+  for (const msg of history) {
+    messages.push({ role: msg.role, content: msg.content });
+  }
+  messages.push({ role: 'user', content: userMessage });
+
+  // Повторные попытки при ошибках
+  const maxRetries = 3;
+  let lastError;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`[GigaChat] Попытка ${attempt}, сообщение: "${userMessage.substring(0,50)}..."`);
+      const response = await client.chat({
+        messages: messages,
+        temperature: 0.8,
+        max_tokens: 250
+      });
+      const answer = response.choices[0]?.message.content || 'Не удалось сгенерировать ответ.';
+      console.log(`[GigaChat] Ответ получен, длина: ${answer.length}`);
+      return answer;
+    } catch (error) {
+      lastError = error;
+      console.error(`[GigaChat] Ошибка (попытка ${attempt}):`, error.message);
+      if (attempt < maxRetries) {
+        // Экспоненциальная задержка
+        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+      }
+    }
+  }
+  console.error('[GigaChat] Все попытки исчерпаны:', lastError);
+  return '🚧 Извините, нейросеть временно не отвечает. Попробуйте чуть позже.';
 }
 
-function getSystemPrompt(level) {
+// Промпты для конкретных тем (можно оставить как есть или улучшить)
+function getThemePrompt(level) {
   const prompts = {
-    'Безопасность': `Ты — психолог, работающий в кратком, вопросном стиле. Тема: "Безопасность" (тревога, страх). Твоя задача — помочь человеку исследовать его чувства, задавая открытые вопросы. Не давай готовых советов, не оценивай, не читай мораль. Задавай вопросы, которые помогут человеку самому прийти к пониманию.
-
-Примеры вопросов:
-- "Что именно вызывает у тебя тревогу?"
-- "Когда это чувство появляется?"
-- "Как твоё тело реагирует на страх?"
-- "Что ты обычно делаешь в такие моменты?"
-- "Бывало ли такое раньше? Чем это заканчивалось?"
-
-После ответа человека задавай следующий уточняющий вопрос. Не пиши длинных текстов. Будь мягким, но направляющим.`,
-
-    'Принятие': `Ты — психолог, работающий в кратком, вопросном стиле. Тема: "Принятие" (одиночество, любовь). Помоги человеку исследовать его чувство одиночества или нехватки принятия. Задавай открытые вопросы, не давай советов.
-
-Примеры вопросов:
-- "В каких ситуациях ты чувствуешь себя одиноким?"
-- "Как ты понимаешь, что тебя не принимают?"
-- "Что для тебя значит 'быть принятым'?"
-- "Есть ли люди, с которыми ты чувствуешь себя комфортно?"
-- "Что бы ты хотел изменить в отношениях с близкими?"
-
-Продолжай диалог, задавая вопросы по ответам.`,
-
-    'Понимание себя': `Ты — психолог, работающий в кратком, вопросном стиле. Тема: "Понимание себя" (самооценка, внутренний диалог). Помоги человеку услышать разные части себя.
-
-Примеры вопросов:
-- "Какая часть тебя говорит это?"
-- "А что хочет другая часть?"
-- "Когда ты впервые заметил этот внутренний голос?"
-- "Как бы ты описал свои сильные стороны?"
-- "Что тебе мешает быть собой?"
-
-Задавай вопросы, не давай готовых ответов.`,
-
-    'Смысл': `Ты — психолог, работающий в кратком, вопросном стиле. Тема: "Смысл" (потеря ориентира). Помоги человеку искать смысл внутри себя.
-
-Примеры вопросов:
-- "Что приносило тебе радость раньше?"
-- "За чем ты скучаешь?"
-- "Что для тебя важно в жизни?"
-- "Если бы у тебя была волшебная палочка, что бы ты изменил?"
-- "Были ли моменты, когда ты чувствовал себя живым?"
-
-Не давай ответов, только вопросы.`,
-
-    'Свобода': `Ты — психолог, работающий в кратком, вопросном стиле. Тема: "Свобода" (ощущение ограничений). Помоги человеку исследовать, что именно его ограничивает.
-
-Примеры вопросов:
-- "В чём именно ты чувствуешь себя несвободным?"
-- "Ты заложник ситуации или своих мыслей?"
-- "Если бы можно было сделать всё что угодно, что бы ты выбрал?"
-- "Кто ты в этой истории: жертва, спасатель или тиран?"
-- "Что случится, если ты позволишь себе быть свободным?"
-
-Задавай вопросы, помогай увидеть выходы.`
+    'Безопасность': `Ты — психолог, тема "Безопасность" (тревога, страх). Используй техники: признание, работа с частями, метафоры. Задавай открытые вопросы, не давай советов.`,
+    'Принятие': `Ты — психолог, тема "Принятие" (одиночество, любовь). Помоги человеку исследовать его чувства, задавая вопросы. Используй признание и работу с частями.`,
+    'Понимание себя': `Ты — психолог, тема "Понимание себя" (самооценка, внутренний диалог). Помоги услышать разные части себя, задавай уточняющие вопросы.`,
+    'Смысл': `Ты — психолог, тема "Смысл" (потеря ориентира). Помоги искать смысл внутри себя через вопросы, не давай готовых ответов.`,
+    'Свобода': `Ты — психолог, тема "Свобода" (ограничения). Исследуй, что именно ограничивает человека, задавай открытые вопросы.`
   };
   return prompts[level] || prompts['Понимание себя'];
 }
 
+// Для сопоставления кнопок с темами
+const levelMap = {
+  '🌿 Безопасность': 'Безопасность',
+  '💗 Принятие': 'Принятие',
+  '🧩 Понимание себя': 'Понимание себя',
+  '🌟 Смысл': 'Смысл',
+  '🕊️ Свобода': 'Свобода'
+};
+
 // ============================================================================
-// ОСНОВНОЙ ОБРАБОТЧИК СООБЩЕНИЙ (с Map в памяти)
+// ОСНОВНОЙ ОБРАБОТЧИК СООБЩЕНИЙ (с историей и свободным диалогом)
 // ============================================================================
 
 bot.on('message', async (msg) => {
@@ -377,7 +395,7 @@ bot.on('message', async (msg) => {
   }
 
   if (text.startsWith('/')) {
-    console.log('Игнорируем команду');
+    console.log('Игнорируем команду (она обработана выше)');
     return;
   }
 
@@ -396,47 +414,40 @@ bot.on('message', async (msg) => {
     if (!fullySubscribed) return;
   }
 
-  // --- 2. Получаем текущую тему из памяти ---
-  const currentLevel = userTopics.get(chatId);
-  console.log(`🔍 Текущая тема для ${chatId}: ${currentLevel}`);
+  // --- 2. Получаем историю из Redis ---
+  const history = await getHistory(chatId);
+  console.log(`📖 История для ${chatId}: ${history.length} сообщений`);
 
-  // --- 3. Определяем, не является ли сообщение выбором новой темы ---
-  const levelMap = {
-    '🌿 Безопасность': 'Безопасность',
-    '💗 Принятие': 'Принятие',
-    '🧩 Понимание себя': 'Понимание себя',
-    '🌟 Смысл': 'Смысл',
-    '🕊️ Свобода': 'Свобода'
-  };
-
-  if (levelMap[text]) {
-    const level = levelMap[text];
-    userTopics.set(chatId, level);
-    console.log(`✅ Установлена тема для пользователя ${chatId}: ${level}`);
+  // --- 3. Определяем, является ли сообщение выбором темы из меню ---
+  const selectedLevel = levelMap[text];
+  if (selectedLevel) {
+    // Сохраняем в историю сообщение пользователя
+    await addMessageToHistory(chatId, 'user', text);
+    console.log(`✅ Пользователь выбрал тему: ${selectedLevel}`);
 
     await bot.sendChatAction(chatId, 'typing');
-    const initialPrompt = `Я выбрал тему "${level}". Поговори со мной об этом.`;
-    const response = await getGigaChatResponse(initialPrompt, level);
+    // Передаём в GigaChat с указанием темы
+    const response = await getGigaChatResponse(text, history, selectedLevel);
     await bot.sendMessage(chatId, response, { parse_mode: 'Markdown' });
+    // Сохраняем ответ в историю
+    await addMessageToHistory(chatId, 'assistant', response);
     return;
   }
 
-  // --- 4. Если нет активной темы ---
-  if (!currentLevel) {
-    console.log(`⛔ Нет активной темы для ${chatId}`);
-    await bot.sendMessage(chatId, 'Пожалуйста, сначала выберите тему из меню.');
-    return;
-  }
+  // --- 4. Свободный диалог (не тема из меню) ---
+  // Сохраняем сообщение пользователя в историю
+  await addMessageToHistory(chatId, 'user', text);
 
-  // --- 5. Есть активная тема, отправляем в GigaChat ---
-  console.log(`➡️ Есть активная тема: ${currentLevel}, отправляем в GigaChat`);
   await bot.sendChatAction(chatId, 'typing');
-  const response = await getGigaChatResponse(text, currentLevel);
+  const response = await getGigaChatResponse(text, history, null); // без темы
   await bot.sendMessage(chatId, response, { parse_mode: 'Markdown' });
+
+  // Сохраняем ответ в историю
+  await addMessageToHistory(chatId, 'assistant', response);
 });
 
 // ============================================================================
-// ЭНДПОИНТ ДЛЯ ВЕБ-ПРИЛОЖЕНИЯ
+// ЭНДПОИНТ ДЛЯ ВЕБ-ПРИЛОЖЕНИЯ (проверка подписки и выдача меню)
 // ============================================================================
 
 app.post('/api/check-sub', async (req, res) => {
