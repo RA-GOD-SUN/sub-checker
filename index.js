@@ -4,7 +4,6 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const path = require('path');
-const redis = require('redis');
 
 // --- Глобальные обработчики ошибок ---
 process.on('uncaughtException', (err) => {
@@ -30,10 +29,10 @@ try {
 }
 const { Agent } = require('node:https');
 
-// --- Подключение к Redis ---
-const redisClient = redis.createClient({ url: process.env.REDIS_URL });
-redisClient.on('error', (err) => console.error('Redis Client Error', err));
-redisClient.connect().then(() => console.log('✅ Redis подключён'));
+// --- Хранилище истории (в памяти) ---
+// Для каждого пользователя храним массив последних сообщений { role, content }
+const userHistories = new Map(); // ключ: chatId, значение: массив
+const MAX_HISTORY = 10;
 
 // --- Чтение переменных окружения ---
 const token = process.env.BOT_TOKEN;
@@ -67,7 +66,6 @@ console.log('CHANNEL2_SHOW:', CHANNEL2_SHOW);
 console.log('CHANNEL2_REQUIRED:', CHANNEL2_REQUIRED);
 console.log('WEBAPP_URL defined:', !!webAppUrl);
 console.log('GIGACHAT_CREDENTIALS defined:', !!process.env.GIGACHAT_CREDENTIALS);
-console.log('REDIS_URL defined:', !!process.env.REDIS_URL);
 console.log('====================');
 
 const bot = new TelegramBot(token);
@@ -174,26 +172,21 @@ function formatUnsubscribedMessage(statuses) {
 }
 
 // ============================================================================
-// ФУНКЦИИ ДЛЯ РАБОТЫ С ИСТОРИЕЙ В REDIS
+// ФУНКЦИИ ДЛЯ РАБОТЫ С ИСТОРИЕЙ В ПАМЯТИ
 // ============================================================================
 
-const HISTORY_KEY_PREFIX = 'history:';
-const MAX_HISTORY = 10; // храним последние 10 сообщений
-
-async function addMessageToHistory(chatId, role, content) {
-  const key = HISTORY_KEY_PREFIX + chatId;
-  let history = await redisClient.get(key);
-  history = history ? JSON.parse(history) : [];
+function addMessageToHistory(chatId, role, content) {
+  if (!userHistories.has(chatId)) {
+    userHistories.set(chatId, []);
+  }
+  const history = userHistories.get(chatId);
   history.push({ role, content });
-  if (history.length > MAX_HISTORY) history.shift(); // удаляем самое старое
-  await redisClient.set(key, JSON.stringify(history));
+  if (history.length > MAX_HISTORY) history.shift();
   console.log(`📝 История для ${chatId} обновлена, теперь ${history.length} сообщений`);
 }
 
-async function getHistory(chatId) {
-  const key = HISTORY_KEY_PREFIX + chatId;
-  const data = await redisClient.get(key);
-  return data ? JSON.parse(data) : [];
+function getHistory(chatId) {
+  return userHistories.get(chatId) || [];
 }
 
 // ============================================================================
@@ -355,7 +348,7 @@ async function getGigaChatResponse(userMessage, history, level = null) {
   return '🚧 Извините, нейросеть временно не отвечает. Попробуйте чуть позже.';
 }
 
-// Промпты для конкретных тем (можно оставить как есть или улучшить)
+// Промпты для конкретных тем
 function getThemePrompt(level) {
   const prompts = {
     'Безопасность': `Ты — психолог, тема "Безопасность" (тревога, страх). Используй техники: признание, работа с частями, метафоры. Задавай открытые вопросы, не давай советов.`,
@@ -377,7 +370,7 @@ const levelMap = {
 };
 
 // ============================================================================
-// ОСНОВНОЙ ОБРАБОТЧИК СООБЩЕНИЙ (с историей и свободным диалогом)
+// ОСНОВНОЙ ОБРАБОТЧИК СООБЩЕНИЙ (с историей в памяти и свободным диалогом)
 // ============================================================================
 
 bot.on('message', async (msg) => {
@@ -414,15 +407,15 @@ bot.on('message', async (msg) => {
     if (!fullySubscribed) return;
   }
 
-  // --- 2. Получаем историю из Redis ---
-  const history = await getHistory(chatId);
+  // --- 2. Получаем историю из памяти ---
+  const history = getHistory(chatId);
   console.log(`📖 История для ${chatId}: ${history.length} сообщений`);
 
   // --- 3. Определяем, является ли сообщение выбором темы из меню ---
   const selectedLevel = levelMap[text];
   if (selectedLevel) {
     // Сохраняем в историю сообщение пользователя
-    await addMessageToHistory(chatId, 'user', text);
+    addMessageToHistory(chatId, 'user', text);
     console.log(`✅ Пользователь выбрал тему: ${selectedLevel}`);
 
     await bot.sendChatAction(chatId, 'typing');
@@ -430,20 +423,20 @@ bot.on('message', async (msg) => {
     const response = await getGigaChatResponse(text, history, selectedLevel);
     await bot.sendMessage(chatId, response, { parse_mode: 'Markdown' });
     // Сохраняем ответ в историю
-    await addMessageToHistory(chatId, 'assistant', response);
+    addMessageToHistory(chatId, 'assistant', response);
     return;
   }
 
   // --- 4. Свободный диалог (не тема из меню) ---
   // Сохраняем сообщение пользователя в историю
-  await addMessageToHistory(chatId, 'user', text);
+  addMessageToHistory(chatId, 'user', text);
 
   await bot.sendChatAction(chatId, 'typing');
   const response = await getGigaChatResponse(text, history, null); // без темы
   await bot.sendMessage(chatId, response, { parse_mode: 'Markdown' });
 
   // Сохраняем ответ в историю
-  await addMessageToHistory(chatId, 'assistant', response);
+  addMessageToHistory(chatId, 'assistant', response);
 });
 
 // ============================================================================
