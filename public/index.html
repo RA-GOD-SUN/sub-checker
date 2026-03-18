@@ -82,14 +82,11 @@
 
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script>
-        // Инициализация Telegram WebApp
         const tg = window.Telegram.WebApp;
         tg.ready();
-        tg.expand(); // разворачиваем на весь экран
+        tg.expand();
 
-        // Получаем данные пользователя
         const userId = tg.initDataUnsafe?.user?.id;
-
         const statusDiv = document.getElementById('status');
         const actionDiv = document.getElementById('action');
 
@@ -98,25 +95,25 @@
             statusDiv.innerText = 'Ошибка: не удалось получить ID пользователя.';
             actionDiv.innerHTML = '';
         } else {
-            // Отправляем запрос на сервер для проверки подписки
             fetch('/api/check-sub', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ userId })
             })
-            .then(response => response.json())
+            .then(res => res.json())
             .then(data => {
                 if (data.ok) {
                     if (data.isMember) {
                         statusDiv.className = 'status success';
-                        statusDiv.innerText = '✅ Вы подписаны на канал!';
-                        actionDiv.innerHTML = 'Меню уже отправлено в чат.';
+                        statusDiv.innerText = '✅ Вы подписаны на все обязательные каналы!';
+                        // Изменено: теперь чётко указываем, что нужно вернуться в бота и закрыть это окно
+                        actionDiv.innerHTML = 'Закройте это окно и нажмите кнопку «🔎 Проверить подписку» ещё раз в чате, чтобы начать работу.';
                     } else {
                         statusDiv.className = 'status error';
-                        statusDiv.innerText = '❌ Вы не подписаны на канал.';
-                        actionDiv.innerHTML = '<a href="https://t.me/+GcITzLO3UEFkMDVi" target="_blank" class="button">📢 Подписаться</a>';
+                        statusDiv.innerText = '❌ Вы не подписаны на некоторые каналы.';
+                        // Показываем кнопку подписки на первый канал (его название)
+                        actionDiv.innerHTML = '<a href="https://t.me/Nastroyshik_Dushi" target="_blank" class="button">📢 Подписаться на Nastroyshik_Dushi</a>';
+                        // Можно добавить вторую кнопку, если нужно, но здесь мы упростили
                     }
                 } else {
                     statusDiv.className = 'status error';
