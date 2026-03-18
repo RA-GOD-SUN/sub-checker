@@ -152,22 +152,49 @@ function isFullySubscribed(statuses) {
 }
 
 function formatUnsubscribedMessage(statuses) {
-  const missing = statuses.filter(ch => ch.show && !ch.isMember);
-  if (missing.length === 0) return null;
+  const missingRequired = statuses.filter(ch => ch.show && !ch.isMember && ch.required);
+  const missingOptional = statuses.filter(ch => ch.show && !ch.isMember && !ch.required);
 
-  let text = '❌ Для доступа необходимо подписаться на каналы:\n\n';
+  if (missingRequired.length === 0 && missingOptional.length === 0) return null;
+
+  let text = '';
   const buttons = [];
 
-  for (const ch of missing) {
-    text += `• ${ch.name}\n`;
-    if (ch.link) {
-      buttons.push([{ text: `📢 Подписаться на ${ch.name}`, url: ch.link }]);
-    } else {
-      text += `  (ссылка не указана, обратитесь к администратору)\n`;
+  if (missingRequired.length > 0) {
+    text += '❌ *Для доступа необходимо подписаться на следующие каналы:*\n\n';
+    for (const ch of missingRequired) {
+      text += `• ${ch.name}\n`;
+      if (ch.link) {
+        buttons.push([{ text: `📢 Подписаться на ${ch.name}`, url: ch.link }]);
+      } else {
+        text += `  (ссылка не указана, обратитесь к администратору)\n`;
+      }
     }
+    text += '\n';
   }
 
-  text += '\nПосле подписки нажмите /start или отправьте любое сообщение, чтобы проверить снова.';
+  if (missingOptional.length > 0) {
+    if (missingRequired.length > 0) {
+      text += '📢 *Дополнительные каналы (необязательно):*\n\n';
+    } else {
+      text += '📢 *Вы не подписаны на дополнительные каналы:*\n\n';
+    }
+    for (const ch of missingOptional) {
+      text += `• ${ch.name}\n`;
+      if (ch.link) {
+        buttons.push([{ text: `📢 Подписаться на ${ch.name}`, url: ch.link }]);
+      } else {
+        text += `  (ссылка не указана, обратитесь к администратору)\n`;
+      }
+    }
+    text += '\n';
+  }
+
+  if (missingRequired.length === 0) {
+    text += 'Подписка на дополнительные каналы не обязательна, но даёт больше возможностей.\n';
+  }
+
+  text += 'После подписки нажмите /start или отправьте любое сообщение, чтобы проверить снова.';
   return { text, buttons };
 }
 
